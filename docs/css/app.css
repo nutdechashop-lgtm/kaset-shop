@@ -181,3 +181,7 @@ a.tile:hover { outline: 2px solid var(--green-soft); }
   .stock-n { font-size: 20px; }
   .big-actions .btn { min-height: 56px; }
 }
+.badge-void, .badge-wait { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.badge-void { background: #F6E3E1; color: var(--red); }
+.badge-wait { background: #FBF0E2; color: var(--orange-ink); }
+tr.void-row td:not(:last-child) { color: var(--muted, #8a8f86); text-decoration: line-through; }

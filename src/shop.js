@@ -133,11 +133,13 @@ export function receivePayment(data, settings, input, opts = {}) {
   if (!rows.length) throw new Error('ไม่มีบิลที่ถูกชำระ');
   const no = opts.no || docNo(settings.prefix, 'RP', date, data.receipts.map((r) => r.no));
   const byNo = new Map(res.updated.map((b) => [b.no, b]));
+  const before = [];
   for (let i = 0; i < data.bills.length; i++) {
     const u = byNo.get(data.bills[i].no);
     if (!u || !rows.some((r) => r.no === u.no)) continue;
     const row = rows.find((r) => r.no === u.no);
-    data.bills[i] = { ...u, interestPaid: round2((data.bills[i].interestPaid || 0) + row.payInterest), receiptNo: u.status === 'paid' ? no : data.bills[i].receiptNo };
+    before.push(payState(data.bills[i]));
+    data.bills[i] = { ...u, interestPaid: round2((data.bills[i].interestPaid || 0) + row.payInterest), receiptNo: u.status === 'paid' ? no : (data.bills[i].receiptNo ?? null), lastReceiptNo: no };
   }
   // What the customer owed on every open bill at the moment of payment (printed on the receipt).
   const owed = open.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.no < b.no ? -1 : 1))
@@ -151,16 +153,43 @@ export function receivePayment(data, settings, input, opts = {}) {
     total: round2(res.totalPrincipal + res.totalInterest),
     received: input.mode === 'bills' ? round2(res.totalPrincipal + res.totalInterest) : round2(Number(input.amount)),
     change: res.change, by: input.by || '', createdAt: new Date().toISOString(),
+    before, // each paid bill as it was before this receipt, so the receipt can be cancelled
   };
   receipt.remaining = round2(owedTotal - receipt.total);
   data.receipts.push(receipt);
   return receipt;
 }
 
+// The bill fields a payment changes (null instead of undefined so it can be stored).
+const PAY_FIELDS = ['principalLeft', 'accruedInterest', 'interestFrom', 'status', 'paidDate', 'receiptNo', 'interestPaid', 'lastReceiptNo'];
+function payState(b) { const o = { no: b.no }; for (const k of PAY_FIELDS) o[k] = b[k] ?? null; return o; }
+
+// ---------- cancelling a wrong receipt ----------
+// bills: the current bills this receipt paid. Only the latest payment on every one of them can be undone.
+export function receiptLockReason(receipt, bills) {
+  if (!receipt) return 'ไม่พบใบเสร็จ';
+  if (receipt.status === 'void') return 'ใบเสร็จนี้ยกเลิกไปแล้ว';
+  if (!receipt.before) return 'ใบเสร็จนี้ออกก่อนมีระบบยกเลิกใบเสร็จ (หรือมาจากโปรแกรมเก่า) ยกเลิกในโปรแกรมไม่ได้';
+  const by = new Map((bills || []).map((b) => [b.no, b]));
+  for (const r of receipt.rows) {
+    const b = by.get(r.no);
+    if (!b) return 'ไม่พบบิล ' + r.no;
+    if (b.lastReceiptNo !== receipt.no) return `บิล ${r.no} มีการรับชำระหลังใบเสร็จนี้แล้ว ต้องยกเลิกใบเสร็จที่ใหม่กว่าก่อน`;
+  }
+  return null;
+}
+// Returns the receipt marked void and the bills put back exactly as they were before it.
+export function voidReceipt(receipt, bills, { by = '', reason = '', at = new Date().toISOString() } = {}) {
+  const lock = receiptLockReason(receipt, bills); if (lock) throw new Error(lock);
+  const prev = new Map(receipt.before.map((x) => [x.no, x]));
+  const restored = bills.filter((b) => prev.has(b.no)).map((b) => { const { no, ...st } = prev.get(b.no); return { ...b, ...st }; });
+  return { receipt: { ...receipt, status: 'void', voidBy: by, voidReason: reason, voidAt: at }, bills: restored };
+}
+
 // Money in for a day: cash sales + debt payments received.
 export function daySummary(data, iso) {
   const bills = data.bills.filter((b) => b.date === iso && b.status !== 'cancelled' && b.source !== 'programkaset');
-  const receipts = data.receipts.filter((r) => r.date === iso && r.source !== 'programkaset');
+  const receipts = data.receipts.filter((r) => r.date === iso && r.source !== 'programkaset' && r.status !== 'void');
   const cash = round2(bills.filter((b) => b.type === 'cash').reduce((s, b) => s + b.total, 0));
   const credit = round2(bills.filter((b) => b.type === 'credit').reduce((s, b) => s + b.total, 0));
   const paid = round2(receipts.reduce((s, r) => s + (r.total || 0), 0));
@@ -173,7 +202,7 @@ export function billLockReason(b) {
   if (!b) return 'ไม่พบบิล';
   if (b.status === 'cancelled') return 'บิลนี้ถูกยกเลิกแล้ว';
   if (b.type === 'credit' && (b.status === 'paid' || (b.principalLeft ?? b.total) < b.total || b.interestFrom || b.receiptNo))
-    return 'บิลเงินเชื่อที่รับชำระไปแล้ว (บางส่วนหรือทั้งหมด) แก้ไขหรือยกเลิกไม่ได้';
+    return 'บิลเงินเชื่อที่รับชำระไปแล้ว (บางส่วนหรือทั้งหมด) แก้ไขหรือยกเลิกไม่ได้ · ถ้ารับชำระผิด ให้ยกเลิกใบเสร็จก่อน (หน้าลูกหนี้ → ประวัติรับชำระ)';
   return null;
 }
 

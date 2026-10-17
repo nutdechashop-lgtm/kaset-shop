@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -121,4 +121,31 @@ const snap = shopSnapshot(od, '2026-10-17'); assert.equal(snap.debt, 1500); asse
 // PIN
 const pin = newPin(); assert.match(pin, /^\d{4}$/);
 assert.equal(await hashPin('1234', 's'), await hashPin('1234', 's')); assert.notEqual(await hashPin('1234', 's'), await hashPin('1235', 's'));
+// cancelling a wrong receipt puts the bills back exactly
+{
+  const dd = emptyData(); dd.customers.push({ code: '1', name: 'ก' }); dd.products.push({ code: 'p', name: 'x', unit: 'u', price: 1000, stock: 0 });
+  const b1 = createSale(dd, settings, { date: '2026-08-01', type: 'credit', customerCode: '1', rate: 2, lines: [{ code: 'p', qty: 1 }] });
+  const b2 = createSale(dd, settings, { date: '2026-09-01', type: 'credit', customerCode: '1', rate: 2, lines: [{ code: 'p', qty: 2 }] });
+  const orig = JSON.stringify(dd.bills);
+  const owedBefore = customerDebts(dd, '2026-10-15').get('1').total;
+  const wrong = receivePayment(dd, settings, { customerCode: '1', date: '2026-10-01', mode: 'amount', amount: 1500 });
+  assert.equal(dd.bills[0].status, 'paid');
+  const cur = (r) => dd.bills.filter((b) => r.rows.some((x) => x.no === b.no));
+  // a later payment on the same bill locks the earlier receipt
+  const later = receivePayment(dd, settings, { customerCode: '1', date: '2026-10-05', mode: 'amount', amount: 100 });
+  assert.match(receiptLockReason(wrong, cur(wrong)), /ใหม่กว่า/);
+  const v2 = voidReceipt(later, cur(later), { by: 'แม่', reason: 'ทดสอบ' });
+  for (const b of v2.bills) dd.bills[dd.bills.findIndex((x) => x.no === b.no)] = b;
+  assert.equal(receiptLockReason(wrong, cur(wrong)), null);
+  const v = voidReceipt(wrong, cur(wrong), { by: 'แม่', reason: 'ใส่ยอดผิด' });
+  for (const b of v.bills) dd.bills[dd.bills.findIndex((x) => x.no === b.no)] = b;
+  assert.equal(v.receipt.status, 'void');
+  const strip = (arr) => JSON.stringify(JSON.parse(arr).map(({ lastReceiptNo, receiptNo, interestPaid, accruedInterest, interestFrom, paidDate, ...b }) => b));
+  assert.equal(strip(JSON.stringify(dd.bills)), strip(orig));
+  assert.equal(customerDebts(dd, '2026-10-15').get('1').total, owedBefore);
+  assert.match(receiptLockReason(v.receipt, cur(wrong)), /ยกเลิกไปแล้ว/);
+  assert.match(receiptLockReason({ no: 'old', rows: [] }, []), /ก่อนมีระบบ/);
+  dd.receipts = dd.receipts.map((r) => (r.no === wrong.no ? v.receipt : r.no === later.no ? v2.receipt : r));
+  assert.equal(daySummary(dd, '2026-10-01').paid, 0);
+}
 console.log('ALL SHOP CHECKS PASSED');

@@ -1,7 +1,7 @@
 // Offline test backend: one shop kept in this browser (IndexedDB). Open the program with ?local=1 to use it.
 // Same functions as backend-cloud.js so the screens don't care which one is running.
 import { getData, saveData, getSettings, saveSettings as storeSettings } from './store.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, docNo, newPin, hashPin, todayIso } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, docNo, newPin, hashPin, todayIso } from './shop.js';
 
 export const mode = 'local';
 let testName = null; try { testName = localStorage.getItem('localUserName'); } catch { /* ignore */ }
@@ -85,6 +85,15 @@ export async function commitBillChange(shopId, billNo, kind, changes, meta) {
   await saveData(data);
   return res.bill;
 }
+export async function commitReceiptVoid(shopId, receiptNo, meta = {}) {
+  const i = data.receipts.findIndex((r) => r.no === receiptNo);
+  if (i < 0) throw new Error('ไม่พบใบเสร็จ ' + receiptNo);
+  const nos = new Set((data.receipts[i].rows || []).map((r) => r.no));
+  const res = voidReceipt(data.receipts[i], data.bills.filter((b) => nos.has(b.no)), { ...meta, by: meta.by || USER.name });
+  data.receipts[i] = res.receipt;
+  for (const b of res.bills) data.bills[data.bills.findIndex((x) => x.no === b.no)] = b;
+  await saveData(data); return res.receipt;
+}
 export async function createRequest(shopId, req) {
   const r = { id: 'r' + Date.now(), status: 'pending', createdAt: new Date().toISOString(), ...req };
   data.requests.push(r); await saveData(data); return r;
@@ -92,7 +101,8 @@ export async function createRequest(shopId, req) {
 export async function resolveRequest(shopId, id, approve, meta) {
   const r = data.requests.find((x) => x.id === id);
   if (!r || r.status !== 'pending') throw new Error('คำขอนี้ถูกจัดการไปแล้ว');
-  if (approve) await commitBillChange(shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason });
+  if (approve && r.kind === 'voidReceipt') await commitReceiptVoid(shopId, r.receiptNo, { by: r.byName, reason: r.reason });
+  else if (approve) await commitBillChange(shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason });
   Object.assign(r, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by, resolvedAt: new Date().toISOString() });
   await saveData(data);
 }

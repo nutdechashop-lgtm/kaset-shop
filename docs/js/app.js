@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines } from './shop.js';
+import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -503,8 +503,9 @@ function viewDebtor(code) {
     const history = [...seen.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.no < b.no ? 1 : -1)).slice(0, 20);
     if (!$('#hist')) return;
     $('#hist').innerHTML = history.length ? `<div class="scroll"><table><tr><th>เลขที่</th><th>วันที่</th><th class="num">บิล</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>
-      ${history.map((r) => `<tr><td class="mono">${esc(r.no)}</td><td>${thDate(r.date)}</td><td class="num">${r.rows ? r.rows.length : ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num">${money(r.total)}</td><td>${r.rows ? `<button class="btn small" data-rp="${esc(r.no)}">พิมพ์</button>` : '<span class="muted" style="font-size:13px">จากโปรแกรมเก่า</span>'}</td></tr>`).join('')}</table></div>` : '<div class="empty">ยังไม่มี</div>';
-    $$('[data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(seen.get(b.dataset.rp))));
+      ${history.map((r) => `<tr${voidCls(r)}><td class="mono">${esc(r.no)}</td><td>${thDate(r.date)}</td><td class="num">${r.rows ? r.rows.length : ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num">${money(r.total)}</td><td>${receiptCell(r)}</td></tr>`).join('')}</table></div>` : '<div class="empty">ยังไม่มี</div>';
+    $$('#hist [data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(seen.get(b.dataset.rp))));
+    $$('#hist [data-vr]').forEach((b) => b.addEventListener('click', () => voidReceiptDialog(seen.get(b.dataset.vr), () => viewDebtor(code))));
   }).catch((e) => { if ($('#hist')) $('#hist').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
   if (!d) return;
 
@@ -738,6 +739,12 @@ function viewApprove() {
         <div class="row" style="justify-content:space-between"><b>ขอดูราคาทุน</b><span class="muted" style="font-size:13px">${esc(r.byName)} · ${new Date(r.createdAt).toLocaleString('th-TH')}</span></div>
         ${r.productName ? `<div>สินค้า: ${esc(r.productName)}</div>` : ''}${r.reason ? `<div class="muted">เหตุผล: ${esc(r.reason)}</div>` : ''}
         <div class="row"><button class="btn primary small" data-pin="${esc(r.id)}" data-who="${esc(r.byName)}">ออก PIN</button><button class="btn small" data-no="${esc(r.id)}">ไม่ให้</button></div></div>`;
+      if (r.kind === 'voidReceipt') return `<div class="stat" style="display:flex;flex-direction:column;gap:6px;padding:14px">
+        <div class="row" style="justify-content:space-between"><b>ขอยกเลิกใบเสร็จ <span class="mono">${esc(r.receiptNo)}</span></b><span class="muted" style="font-size:13px">${esc(r.byName)} · ${new Date(r.createdAt).toLocaleString('th-TH')}</span></div>
+        <div>${esc(custLabel(r.customerCode))} · รับชำระ ${r.before?.date ? thDate(r.before.date) : ''} <b>฿${money(r.before?.total)}</b> (ต้น ${money(r.before?.principal)} + ดอก ${money(r.before?.interest)})</div>
+        <div class="muted" style="font-size:13px">อนุมัติแล้ว ยอดหนี้ของบิล ${esc((r.before?.bills || []).join(', '))} จะกลับไปเหมือนก่อนรับชำระ</div>
+        ${r.reason ? `<div class="muted">เหตุผล: ${esc(r.reason)}</div>` : ''}
+        <div class="row"><button class="btn primary small" data-ok="${esc(r.id)}">อนุมัติ</button><button class="btn small" data-no="${esc(r.id)}">ไม่อนุมัติ</button></div></div>`;
       if (r.kind === 'rate') return `<div class="stat" style="display:flex;flex-direction:column;gap:6px;padding:14px">
         <div class="row" style="justify-content:space-between"><b>ขอเปลี่ยนอัตราดอก <span class="mono">${esc(r.billNo)}</span></b><span class="muted" style="font-size:13px">${esc(r.byName)} · ${new Date(r.createdAt).toLocaleString('th-TH')}</span></div>
         <div>${esc(custLabel(r.customerCode))} · ดอก <b>${r.before?.rate}%</b> → <b>${r.changes?.rate}%</b> · เงินต้น ฿${money(r.before?.principal)}</div>
@@ -768,6 +775,41 @@ function viewApprove() {
       dlg.addEventListener('close', () => { viewApprove(); drawHeader(); markNav(); }, { once: true });
     } catch (e) { toast(e.message); b.disabled = false; }
   }));
+}
+
+// ---------------- cancel a wrong receipt ----------------
+const pendingVoid = (no) => (data?.requests || []).some((q) => q.status === 'pending' && q.kind === 'voidReceipt' && q.receiptNo === no);
+// The buttons at the end of a receipt row (print / cancel / status).
+function receiptCell(r) {
+  if (r.status === 'void') return `<span class="badge-void" title="${esc(r.voidReason || '')}">ยกเลิกแล้ว</span>`;
+  if (!r.rows) return '<span class="muted" style="font-size:13px">จากโปรแกรมเก่า</span>';
+  const v = !r.before ? '' : pendingVoid(r.no) ? '<span class="badge-wait">รอยกเลิก</span>' : `<button class="btn small" data-vr="${esc(r.no)}">${isManager() ? 'ยกเลิก' : 'ขอยกเลิก'}</button>`;
+  return `<div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn small" data-rp="${esc(r.no)}">พิมพ์</button>${v}</div>`;
+}
+const voidCls = (r) => (r.status === 'void' ? ' class="void-row"' : '');
+function voidReceiptDialog(r, done) {
+  if (!r) return;
+  const mgr = isManager();
+  const nos = new Set(r.rows.map((x) => x.no));
+  const known = data.bills.filter((b) => nos.has(b.no));
+  const lock = known.length === nos.size ? receiptLockReason(r, known) : null;
+  openDialog(`<h2>${mgr ? 'ยกเลิกใบเสร็จ' : 'ขอยกเลิกใบเสร็จ'} <span class="mono">${esc(r.no)}</span></h2>
+    <div>${esc(custLabel(r.customerCode))} · วันที่ ${thDate(r.date)} · รับ <b>฿${money(r.total)}</b> (ต้น ${money(r.totalPrincipal)} + ดอก ${money(r.totalInterest)})</div>
+    <div class="muted" style="font-size:13px">บิลที่ถูกตัด: ${r.rows.map((x) => esc(x.no)).join(', ')}</div>
+    ${lock ? `<div class="err">${esc(lock)}</div><div class="row"><button class="btn" value="cancel">ปิด</button></div>` : `
+    <div class="note">ยกเลิกแล้ว <b>ยอดหนี้ของบิลเหล่านี้จะกลับไปเหมือนก่อนรับชำระ</b> (ดอกเบี้ยคิดต่อจากเดิม) แล้วค่อยรับชำระใหม่ให้ถูกต้อง · ใบเสร็จเดิมยังเก็บไว้ในประวัติ ขึ้นว่า "ยกเลิกแล้ว"</div>
+    <label class="field">เหตุผล <span style="color:var(--red)">*</span><input type="text" name="reason" required placeholder="เช่น ใส่ยอดผิด 5,000 ที่จริงรับ 500"></label>
+    <div class="err hidden dlg-err"></div>
+    <div class="row"><button class="btn primary" value="ok" style="${mgr ? 'background:var(--red);border-color:var(--red)' : ''}">${mgr ? 'ยกเลิกใบเสร็จนี้' : 'ส่งคำขอให้เจ้าของอนุมัติ'}</button><button class="btn" value="cancel" formnovalidate>ไม่ยกเลิก</button></div>`}`, async (f) => {
+    const reason = f.reason.value.trim();
+    if (mgr) { await backend.commitReceiptVoid(shopId, r.no, { by: user.name, reason }); toast('ยกเลิกใบเสร็จแล้ว รับชำระใหม่ได้เลย'); }
+    else {
+      if (pendingVoid(r.no)) throw new Error('ส่งคำขอยกเลิกใบเสร็จนี้ไปแล้ว รอเจ้าของอนุมัติ');
+      await backend.createRequest(shopId, { kind: 'voidReceipt', receiptNo: r.no, customerCode: r.customerCode, before: { total: r.total, principal: r.totalPrincipal, interest: r.totalInterest, date: r.date, bills: r.rows.map((x) => x.no) }, reason, byName: user.name });
+      toast('ส่งคำขอแล้ว รอเจ้าของอนุมัติ');
+    }
+    setTimeout(done, 0);
+  });
 }
 
 // ---------------- rate change ----------------
@@ -844,12 +886,14 @@ function viewPaid() {
     const n = norm($('#rq').value), days = +$('#rr').value;
     const from = new Date(Date.now() - days * 86400000); const fromIso = todayIso(from);
     const rows = list.filter((r) => r.date >= fromIso && (!n || norm(r.no).includes(n) || norm(cm.get(r.customerCode)?.name).includes(n)));
-    const sum = (k) => round2(rows.reduce((s2, r) => s2 + (r[k] || 0), 0));
-    $('#rs').innerHTML = `<div class="stat"><div class="k">ใบเสร็จ</div><div class="v">${rows.length}</div></div><div class="stat"><div class="k">เงินต้น</div><div class="v">${money(sum('totalPrincipal'))}</div></div><div class="stat"><div class="k">ดอกเบี้ย</div><div class="v">${money(sum('totalInterest'))}</div></div><div class="stat"><div class="k">รับรวม</div><div class="v">${money(sum('total'))}</div></div>`;
+    const good = rows.filter((r) => r.status !== 'void');
+    const sum = (k) => round2(good.reduce((s2, r) => s2 + (r[k] || 0), 0));
+    $('#rs').innerHTML = `<div class="stat"><div class="k">ใบเสร็จ</div><div class="v">${good.length}</div></div><div class="stat"><div class="k">เงินต้น</div><div class="v">${money(sum('totalPrincipal'))}</div></div><div class="stat"><div class="k">ดอกเบี้ย</div><div class="v">${money(sum('totalInterest'))}</div></div><div class="stat"><div class="k">รับรวม</div><div class="v">${money(sum('total'))}</div></div>`;
     $('#rt').innerHTML = `<tr><th>วันที่</th><th>เลขที่</th><th>ลูกค้า</th><th class="num">บิล</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>`
-      + (rows.length ? rows.map((r) => `<tr><td>${thDate(r.date)}</td><td class="mono">${esc(r.no)}</td><td><a href="#debt/${encodeURIComponent(r.customerCode)}">${esc(custLabel(r.customerCode, cm))}</a></td><td class="num">${r.rows?.length ?? ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num"><b>${money(r.total)}</b></td><td>${r.rows ? `<button class="btn small" data-rp="${esc(r.no)}">พิมพ์</button>` : ''}</td></tr>`).join('')
+      + (rows.length ? rows.map((r) => `<tr${voidCls(r)}><td>${thDate(r.date)}</td><td class="mono">${esc(r.no)}</td><td><a href="#debt/${encodeURIComponent(r.customerCode)}">${esc(custLabel(r.customerCode, cm))}</a></td><td class="num">${r.rows?.length ?? ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num"><b>${money(r.total)}</b></td><td>${receiptCell(r)}</td></tr>`).join('')
         : '<tr><td colspan="8" class="empty">ไม่มีใบเสร็จในช่วงนี้</td></tr>');
-    $$('[data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(list.find((r) => r.no === b.dataset.rp))));
+    $$('#rt [data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(list.find((r) => r.no === b.dataset.rp))));
+    $$('#rt [data-vr]').forEach((b) => b.addEventListener('click', () => voidReceiptDialog(list.find((r) => r.no === b.dataset.vr), viewPaid)));
   };
   $('#rq').addEventListener('input', draw); $('#rr').addEventListener('change', draw); draw();
 }

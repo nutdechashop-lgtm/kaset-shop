@@ -5,7 +5,7 @@
 //   shops/{shopId}/customers|products|bills|receipts|counters/{id}
 import * as fb from './firebase.bundle.js';
 import { firebaseConfig } from './firebase-config.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso, editBill, cancelBill, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, newPin, hashPin } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso, editBill, cancelBill, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, newPin, hashPin } from './shop.js';
 import { addDays } from './interest.js';
 
 export const mode = 'cloud';
@@ -297,6 +297,19 @@ async function billChangeTx(tx, shopId, billNo, kind, changes, meta) {
     return res.bill;
   };
 }
+// Cancel a wrong receipt: bills go back exactly as they were before it.
+async function receiptVoidTx(tx, shopId, receiptNo, meta) {
+  const rref = sub(shopId, 'receipts', receiptNo);
+  const rs = await tx.get(rref);
+  if (!rs.exists()) throw new Error('ไม่พบใบเสร็จ ' + receiptNo);
+  const receipt = rs.data();
+  const snaps = await Promise.all((receipt.rows || []).map((r) => tx.get(sub(shopId, 'bills', r.no))));
+  const res = voidReceipt(receipt, snaps.filter((x) => x.exists()).map((x) => x.data()), meta);
+  return () => { tx.set(rref, res.receipt); for (const b of res.bills) tx.set(sub(shopId, 'bills', b.no), b); return res.receipt; };
+}
+export async function commitReceiptVoid(shopId, receiptNo, meta) {
+  return wrap(() => fb.runTransaction(db, async (tx) => (await receiptVoidTx(tx, shopId, receiptNo, { ...meta, by: meta.by || me.name }))()));
+}
 export async function commitBillChange(shopId, billNo, kind, changes, meta) {
   return wrap(() => fb.runTransaction(db, async (tx) => (await billChangeTx(tx, shopId, billNo, kind, changes, { ...meta, by: meta.by || me.name }))()));
 }
@@ -312,7 +325,7 @@ export async function resolveRequest(shopId, id, approve, meta) {
     const s = await tx.get(ref);
     if (!s.exists() || s.data().status !== 'pending') throw new Error('คำขอนี้ถูกจัดการไปแล้ว');
     const r = s.data();
-    const write = approve ? await billChangeTx(tx, shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason }) : null;
+    const write = !approve ? null : r.kind === 'voidReceipt' ? await receiptVoidTx(tx, shopId, r.receiptNo, { by: r.byName, reason: r.reason }) : await billChangeTx(tx, shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason });
     write?.();
     tx.update(ref, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by || me.name, resolvedAt: new Date().toISOString() });
   }));
