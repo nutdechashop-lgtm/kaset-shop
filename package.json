@@ -4,8 +4,8 @@
   "type": "module",
   "description": "ระบบขายหน้าร้าน (แทนโปรแกรม programkaset) — GitHub Pages + Firebase",
   "scripts": {
-    "build": "esbuild src/importer-entry.js --bundle --format=esm --platform=browser --outfile=docs/js/importer.bundle.js --alias:stream=stream-browserify --inject:build/shim.js --define:global=globalThis --minify",
-    "test": "node test/import.test.mjs"
+    "build": "esbuild src/importer-entry.js --bundle --format=esm --platform=browser --outfile=docs/js/importer.bundle.js --alias:stream=stream-browserify --inject:build/shim.js --define:global=globalThis --minify && cp src/interest.js src/shop.js docs/js/",
+    "test": "node test/shop.test.mjs && node test/import.test.mjs"
   },
   "dependencies": {
     "buffer": "^6.0.3",

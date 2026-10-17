@@ -2,19 +2,32 @@
 <html lang="th">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ระบบหน้าร้าน</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<div class="topbar"><div class="wrap"><b>ระบบหน้าร้าน</b><span class="sub">กำลังพัฒนา</span></div></div>
-<main class="wrap">
-  <section class="card">
-    <h2>เมนู</h2>
-    <div class="row"><a class="btn primary" href="import.html">นำเข้าข้อมูลจากโปรแกรมเก่า</a></div>
-    <div class="muted" style="font-size:14px">หน้าขาย รับชำระ ลูกค้า สินค้า และตั้งค่าร้าน จะเพิ่มเข้ามาเรื่อย ๆ</div>
-  </section>
-</main>
+<header class="topbar">
+  <div class="wrap app-wrap" style="flex-direction:column;align-items:stretch;gap:8px">
+    <div class="row" style="justify-content:space-between">
+      <span class="shopname" id="shopName">ระบบหน้าร้าน</span>
+      <span class="sub" id="today"></span>
+    </div>
+    <nav class="nav" id="nav" aria-label="เมนู">
+      <a href="#sale">ขาย</a>
+      <a href="#debt">ลูกหนี้ / รับชำระ</a>
+      <a href="#bills">ค้นหาบิล</a>
+      <a href="#customers">ลูกค้า</a>
+      <a href="#products">สินค้า / สต๊อก</a>
+      <a href="#settings">ตั้งค่าร้าน</a>
+    </nav>
+  </div>
+</header>
+<main class="wrap app-wrap" id="view"></main>
+<div id="printArea"></div>
+<dialog id="dlg"></dialog>
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

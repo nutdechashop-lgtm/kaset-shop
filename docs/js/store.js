@@ -1,4 +1,4 @@
-// Local data store (IndexedDB). One record per shop. Will be swapped for the online database later;
+// Local data store (IndexedDB). Will be swapped for the online database (Firebase) later;
 // screens only talk to these functions.
 const DB_NAME = 'shop-system';
 const VERSION = 1;
@@ -26,28 +26,22 @@ async function tx(store, mode, fn) {
   });
 }
 
-// Data on this computer. Which shop it is (name, address, code) is set later in shop settings.
+// Data on this computer. Which shop it is (name, address, bill prefix) lives in the 'settings' record.
 export const LOCAL_ID = 'local';
+export const SETTINGS_ID = 'settings';
 
-export const SHOPS = [
-  { id: 'fert', code: '01', label: 'ร้านปุ๋ย' },
-  { id: 'chem', code: '02', label: 'ร้านยา' },
-  { id: 'bangpho', code: '03', label: 'สาขาบางโพธิ์' },
-  { id: 'pongkae', code: '04', label: 'สาขาโป่งแค' },
-];
+export function getShop(id) { return tx('shops', 'readonly', (s) => s.get(id)); }
+export function saveShop(record) { return tx('shops', 'readwrite', (s) => s.put(record)); }
+export function addLog(entry) { return tx('log', 'readwrite', (s) => s.put({ at: new Date().toISOString(), ...entry })); }
 
-export function getShop(id) {
-  return tx('shops', 'readonly', (s) => s.get(id));
+export async function getData() {
+  const d = await getShop(LOCAL_ID);
+  return d || { id: LOCAL_ID, customers: [], products: [], bills: [], receipts: [] };
 }
+export function saveData(data) { return saveShop({ ...data, id: LOCAL_ID }); }
 
-export function saveShop(record) {
-  return tx('shops', 'readwrite', (s) => s.put(record));
+export async function getSettings(defaults) {
+  const s = await getShop(SETTINGS_ID);
+  return { ...defaults, ...(s || {}) };
 }
-
-export function listShops() {
-  return tx('shops', 'readonly', (s) => s.getAll());
-}
-
-export function addLog(entry) {
-  return tx('log', 'readwrite', (s) => s.put({ at: new Date().toISOString(), ...entry }));
-}
+export function saveSettings(s) { return saveShop({ ...s, id: SETTINGS_ID }); }
