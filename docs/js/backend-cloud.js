@@ -45,12 +45,21 @@ async function loadProfile(u) {
   const s = await fb.getDoc(fb.doc(db, 'users', u.uid));
   return s.exists() ? { uid: u.uid, ...s.data() } : { uid: u.uid, code: u.email?.split('@')[0], missing: true };
 }
+// Staff codes are remembered only until the program / browser window is closed; owners and admins stay signed in.
+const STAFF_FLAG = 'kaset-staff-session';
+const flag = { get: () => { try { return sessionStorage.getItem(STAFF_FLAG); } catch { return null; } }, set: (v) => { try { v ? sessionStorage.setItem(STAFF_FLAG, '1') : sessionStorage.removeItem(STAFF_FLAG); } catch { /* ignore */ } } };
+async function applySessionRule(profile) {
+  if (profile?.role === 'staff') { await fb.setPersistence(auth, fb.browserSessionPersistence).catch(() => {}); flag.set(true); }
+  else { await fb.setPersistence(auth, fb.browserLocalPersistence).catch(() => {}); flag.set(false); }
+}
 export function init() {
   return new Promise((resolve) => {
     const off = fb.onAuthStateChanged(auth, async (u) => {
       off();
       try { me = await loadProfile(u); } catch { me = null; }
       if (me && (me.missing || !me.active)) { await fb.signOut(auth); me = null; }
+      // A staff sign-in left over from an earlier window (e.g. saved before this rule existed): sign in again.
+      if (me && me.role === 'staff' && !flag.get()) { await fb.signOut(auth); me = null; }
       resolve(me);
     });
   });
@@ -60,9 +69,10 @@ export async function signIn(code, pin) {
   const cred = await wrap(() => fb.signInWithEmailAndPassword(auth, codeToEmail(code), String(pin)));
   me = await wrap(() => loadProfile(cred.user));
   if (!me || me.missing || !me.active) { await fb.signOut(auth); me = null; throw new Error('รหัสนี้ถูกปิดใช้งาน หรือยังไม่ได้ตั้งสิทธิ์'); }
+  await applySessionRule(me);
   return me;
 }
-export async function signOut() { closeShop(); await fb.signOut(auth); me = null; }
+export async function signOut() { closeShop(); await fb.signOut(auth); me = null; flag.set(false); }
 
 export async function bootstrapNeeded() {
   try { return !(await fb.getDoc(fb.doc(db, 'config', 'main'))).exists(); } catch { return false; }
