@@ -93,3 +93,29 @@ export async function resolveRequest(shopId, id, approve, meta) {
   Object.assign(r, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by, resolvedAt: new Date().toISOString() });
   await saveData(data);
 }
+
+// ---------- backup / restore / delete ----------
+export async function exportShop() {
+  const d = await getData();
+  const settings = await getSettings(DEFAULT_SETTINGS);
+  const { id, ...s } = settings;
+  const asDocs = (arr, key) => (arr || []).map((x) => ({ id: x[key] ?? x.id, data: x }));
+  return { format: 'nutdechashop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: USER.name, shopId: 'local', settings: s,
+    collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [] } };
+}
+export async function restoreShop(shopId, backup, onProgress) {
+  const c = backup.collections || {};
+  const vals = (k) => (c[k] || []).map((x) => x.data);
+  data = { customers: vals('customers'), products: vals('products'), bills: vals('bills'), receipts: vals('receipts'), requests: vals('requests') };
+  await saveData(data);
+  const { lastBackupAt, ...s } = backup.settings || {};
+  await storeSettings({ ...(await getSettings(DEFAULT_SETTINGS)), ...s });
+  onProgress?.(1);
+}
+export async function deleteShop(shopId, onProgress) {
+  data = { customers: [], products: [], bills: [], receipts: [], requests: [] };
+  await saveData(data); onProgress?.(1);
+}
+export async function markBackup() {
+  await storeSettings({ ...(await getSettings(DEFAULT_SETTINGS)), lastBackupAt: new Date().toISOString(), lastBackupBy: USER.name });
+}

@@ -3,6 +3,7 @@
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
 import { RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
+import { getBackupDir, setBackupDir } from './store.js';
 
 const backend = await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js');
 
@@ -40,7 +41,7 @@ function toast(msg) {
 // ---------------- header / routing ----------------
 const NAV = [
   ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า / สต๊อก'],
-  ['approve', 'รออนุมัติ', true], ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['settings', 'ตั้งค่าร้าน', true],
+  ['approve', 'รออนุมัติ', true], ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['backup', 'สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 function drawHeader() {
   const inShop = !!shop;
@@ -62,7 +63,7 @@ function drawHeader() {
   }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
-const routes = { bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+const routes = { backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
 let current = 'sale';
 function render() {
   if (!shop) return;
@@ -956,6 +957,135 @@ async function viewImport() {
       if (backend.mode === 'local') { shop = await backend.openShop(shopId, onRemoteChange); data = shop.data; }
     } catch (e) { message('บันทึกไม่สำเร็จ: ' + esc(e.message)); }
     finally { btn.disabled = false; }
+  });
+}
+
+// ---------------- backup / restore / delete shop ----------------
+const safeName = (x) => String(x || '').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'ร้าน';
+function stamp() { const d = new Date(); const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear() + 543}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+const canPickFolder = () => typeof window.showDirectoryPicker === 'function';
+async function folderReady(dir, ask) {
+  if (!dir) return false;
+  try {
+    if ((await dir.queryPermission({ mode: 'readwrite' })) === 'granted') return true;
+    return ask && (await dir.requestPermission({ mode: 'readwrite' })) === 'granted';
+  } catch { return false; }
+}
+// Writes into <chosen folder>/<prefix>_<shop name>/ when a folder was chosen, otherwise downloads the file.
+async function saveBackupFile(backup, meta) {
+  const label = meta.label || meta.name || meta.id;
+  const fileName = `${APP_NAME}_${safeName(label)}_${stamp()}.json`;
+  const text = JSON.stringify(backup);
+  const dir = await getBackupDir().catch(() => null);
+  if (await folderReady(dir, true)) {
+    const subName = `${safeName(meta.prefix || '00')}_${safeName(label)}`;
+    const subDir = await dir.getDirectoryHandle(subName, { create: true });
+    const fh = await subDir.getFileHandle(fileName, { create: true });
+    const w = await fh.createWritable(); await w.write(text); await w.close();
+    return `โฟลเดอร์ ${dir.name} › ${subName} › ${fileName}`;
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+  return `ดาวน์โหลดไฟล์ ${fileName} (อยู่ในโฟลเดอร์ Downloads)`;
+}
+async function backupOne(meta, onStatus) {
+  onStatus?.(`กำลังอ่านข้อมูล ${meta.label || meta.name || meta.id}…`);
+  const backup = await backend.exportShop(meta.id);
+  const where = await saveBackupFile(backup, { ...backup.settings, ...meta });
+  await backend.markBackup(meta.id);
+  const n = (k) => backup.collections[k]?.length || 0;
+  return { where, counts: `ลูกค้า ${n('customers')} · สินค้า ${n('products')} · บิล ${n('bills').toLocaleString()} · ใบเสร็จ ${n('receipts').toLocaleString()}` };
+}
+
+async function viewBackup() {
+  const dir = await getBackupDir().catch(() => null);
+  const isAdmin = user.role === 'admin' && !previewing();
+  const meta = { ...settings, id: shopId };
+  view.innerHTML = `
+  <section class="card">
+    <h2>สำรองข้อมูลลงเครื่อง</h2>
+    <div class="muted" style="font-size:14px">สำรองล่าสุด: ${settings.lastBackupAt ? `${new Date(settings.lastBackupAt).toLocaleString('th-TH')} โดย ${esc(settings.lastBackupBy || '')}` : '<b style="color:var(--orange-ink)">ยังไม่เคยสำรอง</b>'}</div>
+    ${canPickFolder() ? `<div class="stat" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+        <div><div class="k">โฟลเดอร์เก็บไฟล์สำรอง</div><b id="dirName">${dir ? esc(dir.name) : 'ยังไม่ได้เลือก (จะดาวน์โหลดลงโฟลเดอร์ Downloads)'}</b></div>
+        <button class="btn small" id="pickDir">${dir ? 'เปลี่ยนโฟลเดอร์' : 'เลือกโฟลเดอร์'}</button></div>
+      <div class="muted" style="font-size:13px">แนะนำให้สร้างโฟลเดอร์ เช่น <span class="mono">D:\\สำรองข้อมูลร้าน</span> แล้วเลือกไว้ ระบบจะแยกโฟลเดอร์ย่อยให้ทีละร้าน (เช่น 01_ร้านปุ๋ย)</div>`
+      : '<div class="note">เครื่องนี้เลือกโฟลเดอร์ไม่ได้ ไฟล์สำรองจะถูกดาวน์โหลดลงโฟลเดอร์ Downloads</div>'}
+    <div class="row">
+      <button class="btn primary" id="bkOne">สำรองร้านนี้ตอนนี้</button>
+      ${isAdmin && shops.length > 1 ? `<button class="btn" id="bkAll">สำรองทุกร้าน (${shops.length} ร้าน)</button>` : ''}
+    </div>
+    <div id="bkMsg"></div>
+  </section>
+  <section class="card">
+    <h2>กู้คืนจากไฟล์สำรอง</h2>
+    <div class="note">กู้คืนแล้ว <b>ข้อมูลปัจจุบันของร้านนี้จะถูกแทนที่ด้วยข้อมูลในไฟล์ทั้งหมด</b> รายการที่ทำหลังจากวันที่สำรองจะหายไป ระบบจะสำรองข้อมูลปัจจุบันให้อัตโนมัติก่อนกู้คืน</div>
+    <div class="row"><label class="btn" for="rsFile">เลือกไฟล์สำรอง (.json)…</label><input type="file" id="rsFile" accept=".json,application/json" class="hidden"></div>
+    <div id="rsInfo"></div>
+  </section>
+  ${isAdmin ? `<section class="card" style="border-color:var(--err-line)">
+    <h2 style="color:var(--red)">ลบร้านนี้ถาวร</h2>
+    <div class="muted" style="font-size:14px">ลบลูกค้า สินค้า บิล ใบเสร็จ ลูกหนี้ และการตั้งค่าของ <b>${esc(settings.label || settings.name || shopId)}</b> ทั้งหมด กู้คืนจากระบบไม่ได้ · ร้านอื่นไม่โดนผลกระทบ · รหัสพนักงานที่ผูกกับร้านนี้ร้านเดียวจะถูกปิด</div>
+    <div class="row"><button class="btn" id="delShop" style="color:var(--red);border-color:var(--err-line)">ลบร้านนี้ถาวร…</button></div>
+  </section>` : ''}`;
+
+  const msg = (html, cls = 'ok') => { $('#bkMsg').innerHTML = html ? `<div class="${cls}" style="margin-top:4px">${html}</div>` : ''; };
+  $('#pickDir')?.addEventListener('click', async () => {
+    try { const h = await window.showDirectoryPicker({ id: 'kaset-backup', mode: 'readwrite' }); await setBackupDir(h); viewBackup(); toast('เลือกโฟลเดอร์แล้ว'); }
+    catch (e) { if (e.name !== 'AbortError') toast(e.message); }
+  });
+  $('#bkOne').addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true;
+    try { const r = await backupOne(meta, (t) => msg(`<span class="spinner"></span> ${esc(t)}`, 'muted')); settings.lastBackupAt = new Date().toISOString(); settings.lastBackupBy = user.name; msg(`สำรองแล้ว · ${esc(r.counts)}<br>${esc(r.where)}`); }
+    catch (ex) { msg('สำรองไม่สำเร็จ: ' + esc(ex.message), 'err'); } finally { btn.disabled = false; }
+  });
+  $('#bkAll')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget; btn.disabled = true; const done = [];
+    try { for (const s of shops) { const r = await backupOne(s, (t) => msg(`<span class="spinner"></span> ${esc(t)} (${done.length + 1}/${shops.length})`, 'muted')); done.push(`${esc(s.label || s.name || s.id)}: ${esc(r.counts)}`); } msg('สำรองครบทุกร้าน<br>' + done.join('<br>')); }
+    catch (ex) { msg(`สำรองได้ ${done.length} ร้าน แล้วติดปัญหา: ${esc(ex.message)}`, 'err'); } finally { btn.disabled = false; }
+  });
+
+  $('#rsFile').addEventListener('change', async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    let bk;
+    try { bk = JSON.parse(await file.text()); if (bk.format !== 'nutdechashop-kaset-backup') throw new Error(); }
+    catch { $('#rsInfo').innerHTML = '<div class="err">ไฟล์นี้ไม่ใช่ไฟล์สำรองของโปรแกรมนี้</div>'; return; }
+    const n = (k) => bk.collections?.[k]?.length || 0;
+    const other = bk.shopId !== shopId && backend.mode === 'cloud';
+    $('#rsInfo').innerHTML = `<div class="stat" style="display:flex;flex-direction:column;gap:4px">
+      <div>ไฟล์: <b>${esc(file.name)}</b></div>
+      <div>ร้านในไฟล์: <b>${esc(bk.settings?.label || bk.settings?.name || bk.shopId)}</b> · สำรองเมื่อ ${new Date(bk.exportedAt).toLocaleString('th-TH')} โดย ${esc(bk.exportedBy || '')}</div>
+      <div>ลูกค้า ${n('customers')} · สินค้า ${n('products')} · บิล ${n('bills').toLocaleString()} · ใบเสร็จ ${n('receipts').toLocaleString()}</div></div>
+      ${other ? '<div class="err">ไฟล์นี้เป็นของอีกร้าน ถ้ากู้คืน ข้อมูลร้านนั้นจะมาแทนที่ร้านที่เปิดอยู่</div>' : ''}
+      <div class="row"><button class="btn warn" id="rsGo">กู้คืนเข้าร้าน "${esc(settings.label || settings.name || shopId)}"</button><span class="muted" id="rsState"></span></div>`;
+    $('#rsGo').addEventListener('click', async () => {
+      if (!confirm(`ยืนยันกู้คืน?\nข้อมูลปัจจุบันของ "${settings.label || settings.name || shopId}" จะถูกแทนที่ด้วยข้อมูลจากไฟล์`)) return;
+      const btn = $('#rsGo'); btn.disabled = true;
+      try {
+        $('#rsState').textContent = 'กำลังสำรองข้อมูลปัจจุบันไว้ก่อน…';
+        await backupOne(meta);
+        await backend.restoreShop(shopId, bk, (p) => { $('#rsState').textContent = `กำลังกู้คืน… ${Math.round(p * 100)}%`; });
+        toast('กู้คืนเรียบร้อย'); location.hash = 'sale'; await enterShop(shopId);
+      } catch (ex) { $('#rsState').textContent = ''; $('#rsInfo').insertAdjacentHTML('beforeend', `<div class="err">กู้คืนไม่สำเร็จ: ${esc(ex.message)}</div>`); btn.disabled = false; }
+    });
+  });
+
+  $('#delShop')?.addEventListener('click', () => {
+    const name = settings.label || settings.name || shopId;
+    openDialog(`<h2 style="color:var(--red)">ลบร้าน "${esc(name)}" ถาวร</h2>
+      <ol style="margin:0;padding-left:20px;line-height:1.7"><li>ระบบจะสำรองข้อมูลร้านนี้ลงเครื่องก่อน</li><li>แล้วลบข้อมูลทั้งหมดของร้านนี้ออกจากระบบ กู้จากระบบไม่ได้ (กู้ได้จากไฟล์สำรองเท่านั้น)</li></ol>
+      <label class="field">พิมพ์ชื่อร้าน <span class="mono">${esc(name)}</span> เพื่อยืนยัน<input type="text" name="confirm" autocomplete="off" required></label>
+      <div class="muted" id="delState" style="font-size:14px"></div>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn warn" value="ok">สำรองแล้วลบถาวร</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+      if (f.confirm.value.trim() !== name) throw new Error('ชื่อร้านไม่ตรง');
+      $('#delState').textContent = 'กำลังสำรองข้อมูล…';
+      const r = await backupOne(meta);
+      $('#delState').textContent = `สำรองแล้ว (${r.where}) · กำลังลบ…`;
+      await backend.deleteShop(shopId, (p) => { $('#delState').textContent = `สำรองแล้ว · กำลังลบ… ${Math.round(p * 100)}%`; });
+      toast(`ลบร้าน ${name} แล้ว · ไฟล์สำรอง: ${r.where}`);
+      if (backend.mode === 'cloud') { leaveShop(); location.hash = ''; viewShopPicker(); } else { location.hash = 'sale'; await enterShop(shopId); }
+    });
   });
 }
 

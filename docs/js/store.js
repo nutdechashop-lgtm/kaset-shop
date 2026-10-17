@@ -45,3 +45,7 @@ export async function getSettings(defaults) {
   return { ...defaults, ...(s || {}) };
 }
 export function saveSettings(s) { return saveShop({ ...s, id: SETTINGS_ID }); }
+
+// Folder chosen for backup files (a File System Access handle, Chrome / Edge on a computer).
+export async function getBackupDir() { return (await getShop('backupDir'))?.handle || null; }
+export async function setBackupDir(handle) { await saveShop({ id: 'backupDir', handle }); }

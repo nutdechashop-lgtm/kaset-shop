@@ -304,3 +304,62 @@ export async function resolveRequest(shopId, id, approve, meta) {
     tx.update(ref, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by || me.name, resolvedAt: new Date().toISOString() });
   }));
 }
+
+// ---------- backup / restore / delete a whole shop ----------
+export const SHOP_COLLECTIONS = ['customers', 'products', 'bills', 'receipts', 'requests', 'counters'];
+const BATCH_SIZE = 400;
+async function commitInBatches(ops, onStep) {
+  for (let i = 0; i < ops.length; i += BATCH_SIZE) {
+    const b = fb.writeBatch(db);
+    ops.slice(i, i + BATCH_SIZE).forEach((op) => op(b));
+    await wrap(() => b.commit());
+    onStep?.(Math.min(BATCH_SIZE, ops.length - i));
+  }
+}
+// Every record of the shop (not only the recent ones kept live), as plain JSON.
+export async function exportShop(shopId) {
+  const s = await wrap(() => fb.getDoc(shopDoc(shopId)));
+  if (!s.exists()) throw new Error('ไม่พบร้านนี้');
+  const collections = {};
+  for (const c of SHOP_COLLECTIONS) {
+    const snap = await wrap(() => fb.getDocs(sub(shopId, c)));
+    collections[c] = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
+  }
+  const { createdAt, ...settings } = s.data();
+  return { format: 'nutdechashop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: me.name, shopId, settings, collections };
+}
+async function wipeShop(shopId, onStep) {
+  const refs = [];
+  for (const c of SHOP_COLLECTIONS) { const snap = await wrap(() => fb.getDocs(sub(shopId, c))); refs.push(...snap.docs.map((d) => d.ref)); }
+  await commitInBatches(refs.map((r) => (b) => b.delete(r)), onStep);
+  return refs.length;
+}
+export async function restoreShop(shopId, backup, onProgress) {
+  const writes = [];
+  for (const c of SHOP_COLLECTIONS) for (const { id, data: d } of backup.collections[c] || []) writes.push([sub(shopId, c, id), d]);
+  let existing = 0;
+  for (const c of SHOP_COLLECTIONS) existing += (await wrap(() => fb.getDocs(sub(shopId, c)))).size;
+  const total = existing + writes.length || 1;
+  let done = 0;
+  const step = (n) => { done += n; onProgress?.(done / total); };
+  await wipeShop(shopId, step);
+  await commitInBatches(writes.map(([ref, d]) => (b) => b.set(ref, d)), step);
+  const { lastBackupAt, ...settings } = backup.settings || {};
+  await wrap(() => fb.setDoc(shopDoc(shopId), { ...settings, restoredAt: new Date().toISOString(), restoredFrom: backup.exportedAt }, { merge: true }));
+}
+// Super-admin only: remove every record, the shop itself, and the shop from people's access.
+export async function deleteShop(shopId, onProgress) {
+  let existing = 0;
+  for (const c of SHOP_COLLECTIONS) existing += (await wrap(() => fb.getDocs(sub(shopId, c)))).size;
+  let done = 0;
+  await wipeShop(shopId, (n) => { done += n; onProgress?.(done / (existing || 1)); });
+  const users = await wrap(() => fb.getDocs(fb.query(fb.collection(db, 'users'), fb.where('shops', 'array-contains', shopId))));
+  for (const u of users.docs) {
+    const left = (u.data().shops || []).filter((x) => x !== shopId);
+    await wrap(() => fb.updateDoc(u.ref, left.length ? { shops: left } : { shops: left, active: false }));
+  }
+  await wrap(() => fb.deleteDoc(shopDoc(shopId)));
+}
+export async function markBackup(shopId) {
+  await wrap(() => fb.setDoc(shopDoc(shopId), { lastBackupAt: new Date().toISOString(), lastBackupBy: me.name }, { merge: true }));
+}
