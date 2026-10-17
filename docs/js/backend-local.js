@@ -4,7 +4,8 @@ import { getData, saveData, getSettings, saveSettings as storeSettings } from '.
 import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill } from './shop.js';
 
 export const mode = 'local';
-const USER = { uid: 'local', code: 'local', name: 'ทดสอบ (เครื่องนี้)', role: 'admin', shops: ['local'], active: true };
+let testName = null; try { testName = localStorage.getItem('localUserName'); } catch { /* ignore */ }
+const USER = { uid: 'local', code: 'local', name: testName || 'ทดสอบ (เครื่องนี้)', role: 'admin', shops: ['local'], active: true };
 let data = null;
 
 export async function init() { return USER; }
@@ -15,7 +16,7 @@ export async function bootstrapNeeded() { return false; }
 
 export async function listShops() {
   const s = await getSettings(DEFAULT_SETTINGS);
-  return [{ id: 'local', label: 'เครื่องนี้', ...s }];
+  return [{ label: 'เครื่องนี้', ...s, id: 'local' }];
 }
 export async function createShop() { throw new Error('โหมดทดสอบมีร้านเดียว'); }
 
@@ -65,7 +66,7 @@ export async function replaceShopData(shopId, result, onProgress) {
 }
 export async function shopInfo() { const d = await getData(); return { importedAt: d.importedAt, bills: d.bills.length }; }
 
-export async function listUsers() { return [USER]; }
+export async function listUsers() { return data?.demoUsers || [USER]; }
 export async function createUser() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }
 export async function setUserActive() {}
 export async function changeMyPin() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }

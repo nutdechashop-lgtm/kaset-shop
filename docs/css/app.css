@@ -131,3 +131,4 @@ input:disabled, textarea:disabled, select:disabled { opacity: .75; cursor: not-a
 .grace-box { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--btn-line); border-radius: 12px; padding: 6px 10px 6px 12px; background: var(--stat-bg); }
 .grace-box select { min-height: 42px; }
 .badge { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--orange); color: #fff; font-size: 12px; font-weight: 700; margin-left: 4px; }
+.app-title { font-family: var(--mono); font-weight: 600; letter-spacing: .5px; color: var(--green); font-size: 15px; }

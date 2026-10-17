@@ -18,6 +18,7 @@ const thDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-');
 const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
+const APP_NAME = 'NUTDECHASHOP_KASET';
 const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'พนักงาน' };
 // The super-admin can preview the program as an owner / staff member sees it (to check before a shop goes live).
 let viewAs = lsGetSafe('viewAs') || '';
@@ -45,7 +46,7 @@ function drawHeader() {
   const inShop = !!shop;
   const pending = inShop ? pendingRequests().length : 0;
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
-  $('#shopName').textContent = inShop ? (settings.name || settings.label || 'ระบบหน้าร้าน') : 'ระบบหน้าร้าน';
+  $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
@@ -99,6 +100,7 @@ async function viewLogin() {
   drawHeader();
   const firstRun = await backend.bootstrapNeeded();
   view.innerHTML = `<section class="card" style="max-width:420px;margin:24px auto;width:100%">
+    <div class="app-title">${APP_NAME}</div>
     ${firstRun ? `<h2>ตั้งค่าครั้งแรก: สร้างรหัสแอดมินใหญ่</h2>
       <div class="muted" style="font-size:14px">ทำครั้งเดียว รหัสนี้เห็นทุกร้าน และใช้สร้างรหัสให้เจ้าของร้านและพนักงาน</div>` : '<h2>เข้าสู่ระบบ</h2>'}
     <form id="lf" style="display:flex;flex-direction:column;gap:12px">
@@ -811,7 +813,7 @@ async function viewUsers() {
   const roles = asAdmin ? ['owner', 'staff', 'admin'] : ['staff'];
   if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
   view.innerHTML = `<section class="card">
-    <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2>${backend.mode === 'cloud' ? '<button class="btn primary" id="addu">+ เพิ่มรหัส</button>' : ''}</div>
+    <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2><button class="btn primary" id="addu">+ เพิ่มรหัส</button></div>
     <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ</th><th></th></tr>
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>

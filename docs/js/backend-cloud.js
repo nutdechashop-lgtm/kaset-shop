@@ -82,10 +82,10 @@ export async function setupAdmin({ code, name, pin }) {
 export async function listShops() {
   if (me.role === 'admin') {
     const s = await wrap(() => fb.getDocs(fb.collection(db, 'shops')));
-    return s.docs.map((d) => ({ id: d.id, ...DEFAULT_SETTINGS, ...d.data() })).sort((a, b) => (a.id < b.id ? -1 : 1));
+    return s.docs.map((d) => ({ ...DEFAULT_SETTINGS, ...d.data(), id: d.id })).sort((a, b) => (a.id < b.id ? -1 : 1));
   }
   const out = [];
-  for (const id of me.shops || []) { const d = await wrap(() => fb.getDoc(shopDoc(id))); if (d.exists()) out.push({ id, ...DEFAULT_SETTINGS, ...d.data() }); }
+  for (const id of me.shops || []) { const d = await wrap(() => fb.getDoc(shopDoc(id))); if (d.exists()) out.push({ ...DEFAULT_SETTINGS, ...d.data(), id }); }
   return out;
 }
 export async function createShop({ label }) {
