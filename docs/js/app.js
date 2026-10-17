@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary } from './shop.js';
+import { RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 
 const backend = await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js');
@@ -39,11 +39,12 @@ function toast(msg) {
 // ---------------- header / routing ----------------
 const NAV = [
   ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า / สต๊อก'],
-  ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['settings', 'ตั้งค่าร้าน', true],
+  ['approve', 'รออนุมัติ', true], ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 function drawHeader() {
   const inShop = !!shop;
-  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}</a>`).join('') : '';
+  const pending = inShop ? pendingRequests().length : 0;
+  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || 'ระบบหน้าร้าน') : 'ระบบหน้าร้าน';
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
@@ -60,23 +61,25 @@ function drawHeader() {
   }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
-const routes = { sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+const routes = { bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
 let current = 'sale';
 function render() {
   if (!shop) return;
   let [name, arg] = (location.hash.slice(1) || 'sale').split('/');
   if (!routes[name] || (NAV.find((n) => n[0] === name)?.[2] && !isManager())) name = 'sale';
   current = name;
-  drawHeader();
-  $$('#nav a').forEach((a) => { if (a.getAttribute('href') === '#' + name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  drawHeader(); markNav();
   $('#today').textContent = 'วันที่ ' + thDate(todayIso());
   routes[name](arg ? decodeURIComponent(arg) : undefined);
 }
+function markNav() { $$('#nav a').forEach((a) => { if (a.getAttribute('href') === '#' + current) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); }
 window.addEventListener('hashchange', render);
+const pendingRequests = () => (data?.requests || []).filter((r) => r.status === 'pending');
 
 // Data changed on another device: refresh list screens (never while someone is typing or a dialog is open).
 function onRemoteChange(kind) {
   if (kind === 'settings') { settings = shop.settings; drawHeader(); return; }
+  if (current !== 'approve') drawHeader(), markNav();
   if (dlg.open || ['sale', 'import', 'settings', 'users'].includes(current)) return;
   const a = document.activeElement;
   if (a && view.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.value) return;
@@ -509,6 +512,8 @@ function viewDebtor(code) {
 // ---------------- bills ----------------
 function showBill(b) {
   if (!b) return;
+  const lock = billLockReason(b);
+  const pend = pendingRequests().some((r) => r.billNo === b.no);
   const st = b.status === 'cancelled' ? '<span class="pill cancel">ยกเลิก</span>' : b.type === 'credit' ? (b.status === 'open' ? '<span class="pill credit">ค้างชำระ</span>' : '<span class="pill cash">ชำระแล้ว</span>') : '<span class="pill cash">เงินสด</span>';
   openDialog(`<h2 class="mono">${esc(b.no)}</h2>
     <div>${thDate(b.date)} · ${b.type === 'credit' ? 'เงินเชื่อ ' + b.rate + '%' : 'เงินสด'} ${st}${b.graceDays ? ` · ปลอดดอก ${b.graceDays / 30} เดือน` : ''}</div>
@@ -518,7 +523,35 @@ function showBill(b) {
     ${b.discount ? `<div class="total-box"><span>ส่วนลด</span><span class="mono">${money(b.discount)}</span></div>` : ''}
     <div class="total-box big"><span>สุทธิ</span><span class="mono">${money(b.total)}</span></div>
     ${b.receiptNo ? `<div class="muted">ชำระในใบเสร็จ ${esc(b.receiptNo)} ${b.paidDate ? 'วันที่ ' + thDate(b.paidDate) : ''}</div>` : ''}
-    <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ปิด</button></div>`, () => { printBill(b); });
+    ${b.edits ? `<div class="muted" style="font-size:14px">แก้ไขแล้ว ${b.edits} ครั้ง · ล่าสุดโดย ${esc(b.editHistory?.at(-1)?.by || '')}${b.editHistory?.at(-1)?.reason ? ' (' + esc(b.editHistory.at(-1).reason) + ')' : ''}</div>` : ''}
+    ${b.status === 'cancelled' ? `<div class="err">ยกเลิกโดย ${esc(b.cancelledBy || '')}${b.cancelReason ? ' · ' + esc(b.cancelReason) : ''}</div>` : ''}
+    ${pend ? '<div class="note">มีคำขอแก้ไข/ยกเลิกบิลนี้รอเจ้าของอนุมัติอยู่</div>' : ''}
+    ${lock && b.status !== 'cancelled' ? `<div class="muted" style="font-size:13px">${esc(lock)}</div>` : ''}
+    <div class="row" style="justify-content:space-between">
+      <span class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ปิด</button></span>
+      ${!lock && !pend ? `<span class="row">${isManager()
+        ? '<button class="btn" value="edit">แก้ไขบิล</button><button class="btn" value="void" style="color:var(--red)">ยกเลิกบิล</button>'
+        : '<button class="btn" value="edit">ขอแก้ไขบิล</button><button class="btn" value="void" style="color:var(--red)">ขอยกเลิกบิล</button>'}</span>` : ''}
+    </div>`, (f, action) => {
+    if (action === 'print') printBill(b);
+    else if (action === 'edit') { billCache.set(b.no, b); location.hash = 'bill/' + encodeURIComponent(b.no); }
+    else if (action === 'void') { setTimeout(() => voidBill(b), 0); }
+  });
+}
+const billCache = new Map();
+function voidBill(b) {
+  const mgr = isManager();
+  openDialog(`<h2>${mgr ? 'ยกเลิกบิล' : 'ขอยกเลิกบิล'} <span class="mono">${esc(b.no)}</span></h2>
+    <div>${esc(custLabel(b.customerCode))} · ฿${money(b.total)}</div>
+    <div class="muted" style="font-size:14px">สินค้าในบิลจะถูกคืนเข้าสต๊อก${b.type === 'credit' ? ' และยอดค้างของบิลนี้จะหายไป' : ''}</div>
+    <label class="field">เหตุผล<input type="text" name="reason" ${mgr ? '' : 'required'} placeholder="เช่น ลูกค้าคืนของทั้งหมด, ออกบิลผิด"></label>
+    <div class="err hidden dlg-err"></div>
+    <div class="row"><button class="btn warn" value="ok">${mgr ? 'ยืนยันยกเลิกบิล' : 'ส่งคำขอ'}</button><button class="btn" value="cancel" formnovalidate>ไม่ยกเลิก</button></div>`, async (f) => {
+    const reason = f.reason.value.trim();
+    if (mgr) { await backend.commitBillChange(shopId, b.no, 'cancel', null, { by: user.name, reason }); toast('ยกเลิกบิลแล้ว'); }
+    else { await backend.createRequest(shopId, { kind: 'cancel', billNo: b.no, customerCode: b.customerCode, before: { total: b.total, lines: b.lines }, reason, byName: user.name }); toast('ส่งคำขอยกเลิกแล้ว รอเจ้าของอนุมัติ'); }
+    if (current !== 'sale') render();
+  });
 }
 
 function viewBills() {
@@ -567,6 +600,101 @@ function viewBills() {
   $('#blt').addEventListener('click', open);
   $('#blt').addEventListener('keydown', (e) => { if (e.key === 'Enter') open(e); });
   draw(); $('#bq').focus();
+}
+
+// ---------------- edit a saved bill ----------------
+async function viewBillEdit(no) {
+  let bill = data.bills.find((b) => b.no === no) || billCache.get(no);
+  if (!bill) { try { bill = (await backend.findBills(shopId, { no }))[0]; } catch { /* shown below */ } }
+  const lock = billLockReason(bill);
+  if (lock) { view.innerHTML = `<div><a href="#bills" class="btn small">← ค้นหาบิล</a></div><div class="err">${esc(lock)}</div>`; return; }
+  const mgr = isManager();
+  const st = { lines: bill.lines.map((l) => ({ ...l })), discount: bill.discount || 0, rate: bill.rate, grace: !!bill.graceDays, graceMonths: Math.round((bill.graceDays || 0) / 30) || settings.defaultGraceMonths };
+  view.innerHTML = `
+  <div><a href="#bills" class="btn small">← ค้นหาบิล</a></div>
+  <section class="card">
+    <h2>${mgr ? 'แก้ไขบิล' : 'ขอแก้ไขบิล'} <span class="mono">${esc(bill.no)}</span></h2>
+    <div class="muted">${thDate(bill.date)} · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · ${esc(custLabel(bill.customerCode))} · ยอดเดิม ฿${money(bill.total)}${bill.edits ? ` · แก้ไขแล้ว ${bill.edits} ครั้ง` : ''}</div>
+    <label class="field">เพิ่มสินค้า<input type="search" id="eq" placeholder="พิมพ์ชื่อสินค้า แล้วกด Enter" autocomplete="off"></label>
+    <div class="results hidden" id="eres"></div>
+    <div class="scroll"><table id="elines"></table></div>
+    <div class="form-grid">
+      <label class="field">ส่วนลด (บาท)<input type="number" id="edisc" min="0" step="0.01" value="${st.discount || ''}"></label>
+      ${bill.type === 'credit' ? `<label class="field">ดอกเบี้ย<select id="erate">${RATES.map((r) => `<option value="${r}" ${r === st.rate ? 'selected' : ''}>${r}%</option>`).join('')}</select></label>` : '<span></span>'}
+    </div>
+    ${bill.type === 'credit' ? `<div class="grace-box" style="max-width:360px"><label class="row" style="font-weight:600;min-height:44px;gap:8px"><input type="checkbox" id="egrace" ${st.grace ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ปลอดดอก</label>
+      <select id="emonths" ${st.grace ? '' : 'disabled'}>${GRACE_MONTHS.map((m) => `<option value="${m}" ${m === st.graceMonths ? 'selected' : ''}>${m} เดือน</option>`).join('')}</select></div>` : ''}
+    <label class="field">เหตุผลที่แก้ ${mgr ? '<span class="muted" style="font-weight:400">(ไม่ใส่ก็ได้)</span>' : '<span style="color:var(--red)">*</span>'}<input type="text" id="ereason" placeholder="เช่น ลูกค้าคืน 2 กระสอบ, ใส่ราคาผิด"></label>
+    <div class="total-box big"><span>ยอดใหม่</span><span class="mono" id="enet"></span></div>
+    <div class="err hidden" id="eerr"></div>
+    <div class="row"><button class="btn primary" id="esave">${mgr ? 'บันทึกการแก้ไข' : 'ส่งคำขอให้เจ้าของอนุมัติ'}</button><a class="btn" href="#bills">ยกเลิก</a></div>
+  </section>`;
+  const pm = () => new Map(data.products.map((p) => [p.code, p]));
+  const draw = () => {
+    const m = pm();
+    $('#elines').innerHTML = `<tr><th>สินค้า</th><th class="num">จำนวน</th><th class="num">ราคา/หน่วย</th><th class="num">รวม</th><th></th></tr>` + st.lines.map((l, i) => `<tr>
+      <td>${esc(l.name || m.get(l.code)?.name)} <span class="muted">· ${esc(l.unit || m.get(l.code)?.unit)}</span></td>
+      <td class="num"><input class="qty" type="number" min="0" step="any" data-i="${i}" data-f="qty" value="${l.qty}" aria-label="จำนวน"></td>
+      <td class="num"><input class="price" type="number" min="0" step="0.01" data-i="${i}" data-f="price" value="${l.price}" aria-label="ราคา"></td>
+      <td class="num">${money(l.qty * l.price)}</td><td><button class="btn small" data-del="${i}">ลบ</button></td></tr>`).join('');
+    total();
+  };
+  const total = () => { $('#enet').textContent = money(st.lines.reduce((s2, l) => s2 + l.qty * l.price, 0) - (Number(st.discount) || 0)); };
+  $('#elines').addEventListener('input', (e) => { const t = e.target; if (!t.dataset.f) return; st.lines[+t.dataset.i][t.dataset.f] = Number(t.value) || 0; t.closest('tr').children[3].textContent = money(st.lines[+t.dataset.i].qty * st.lines[+t.dataset.i].price); total(); });
+  $('#elines').addEventListener('click', (e) => { const b = e.target.closest('[data-del]'); if (b) { st.lines.splice(+b.dataset.del, 1); draw(); } });
+  const eq = $('#eq'), eres = $('#eres'); let found = [];
+  const add = (code) => { const p = pm().get(code); const ex = st.lines.find((l) => l.code === code); if (ex) ex.qty += 1; else st.lines.push({ code, name: p.name, unit: p.unit, qty: 1, price: p.price }); eq.value = ''; eres.classList.add('hidden'); draw(); };
+  eq.addEventListener('input', () => { found = searchProducts(eq.value); eres.classList.toggle('hidden', !eq.value); eres.innerHTML = found.map((p) => `<button type="button" data-code="${esc(p.code)}"><span>${esc(p.name)}</span><span class="mono">${money(p.price)}</span></button>`).join('') || '<div class="empty">ไม่พบสินค้า</div>'; });
+  eq.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); if (found[0]) add(found[0].code); } });
+  eres.addEventListener('click', (e) => { const b = e.target.closest('[data-code]'); if (b) add(b.dataset.code); });
+  $('#edisc').addEventListener('input', (e) => { st.discount = Number(e.target.value) || 0; total(); });
+  $('#erate')?.addEventListener('change', (e) => { st.rate = Number(e.target.value); });
+  $('#egrace')?.addEventListener('change', (e) => { st.grace = e.target.checked; $('#emonths').disabled = !st.grace; });
+  $('#emonths')?.addEventListener('change', (e) => { st.graceMonths = Number(e.target.value); });
+  $('#esave').addEventListener('click', async () => {
+    const err = $('#eerr'); err.classList.add('hidden');
+    const reason = $('#ereason').value.trim();
+    const changes = { lines: st.lines.map(({ code, qty, price, name, unit }) => ({ code, qty, price, name, unit })), discount: st.discount, rate: st.rate, graceMonths: bill.type === 'credit' ? (st.grace ? st.graceMonths : 0) : 0 };
+    const btn = $('#esave'); btn.disabled = true;
+    try {
+      if (!mgr && !reason) throw new Error('ใส่เหตุผลที่ขอแก้');
+      // check the change is valid before saving / sending
+      const { editBill } = await import('./shop.js');
+      const preview = editBill(data.products, bill, changes, { by: user.name, reason });
+      if (mgr) {
+        const nb = await backend.commitBillChange(shopId, bill.no, 'edit', changes, { by: user.name, reason });
+        toast('บันทึกการแก้ไขแล้ว'); location.hash = 'bills'; setTimeout(() => showBill(nb), 50);
+      } else {
+        await backend.createRequest(shopId, { kind: 'edit', billNo: bill.no, customerCode: bill.customerCode, changes, before: { total: bill.total, lines: bill.lines }, after: { total: preview.bill.total, lines: preview.bill.lines }, reason, byName: user.name });
+        toast('ส่งคำขอแล้ว รอเจ้าของอนุมัติ'); location.hash = 'bills';
+      }
+    } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); btn.disabled = false; }
+  });
+  draw();
+}
+
+// ---------------- approvals (owner) ----------------
+function viewApprove() {
+  const list = pendingRequests().sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  view.innerHTML = `<section class="card"><h2>รออนุมัติ (${list.length})</h2>
+    ${list.length ? '' : '<div class="empty">ไม่มีคำขอค้างอยู่</div>'}
+    ${list.map((r) => {
+      const d = r.kind === 'edit' ? diffLines(r.before?.lines || [], r.after?.lines || []) : [];
+      return `<div class="stat" style="display:flex;flex-direction:column;gap:6px;padding:14px">
+        <div class="row" style="justify-content:space-between"><b>${r.kind === 'cancel' ? 'ขอยกเลิกบิล' : 'ขอแก้ไขบิล'} <span class="mono">${esc(r.billNo)}</span></b><span class="muted" style="font-size:13px">${esc(r.byName)} · ${new Date(r.createdAt).toLocaleString('th-TH')}</span></div>
+        <div>${esc(custLabel(r.customerCode))} · ยอด ฿${money(r.before?.total)}${r.kind === 'edit' ? ` → <b>฿${money(r.after?.total)}</b>` : ' → ยกเลิกทั้งบิล'}</div>
+        ${d.length ? `<ul style="margin:0;padding-left:20px">${d.map((x) => `<li>${x.kind === 'add' ? `เพิ่ม ${esc(x.name)} ${x.qty} × ${money(x.price)}` : x.kind === 'remove' ? `ลบ ${esc(x.name)} (${x.qty})` : `${esc(x.name)}: ${esc(x.from)} → ${esc(x.to)}`}</li>`).join('')}</ul>` : ''}
+        ${r.reason ? `<div class="muted">เหตุผล: ${esc(r.reason)}</div>` : ''}
+        <div class="row"><button class="btn primary small" data-ok="${esc(r.id)}">อนุมัติ</button><button class="btn small" data-no="${esc(r.id)}">ไม่อนุมัติ</button></div>
+      </div>`;
+    }).join('')}</section>`;
+  const act = async (id, ok, btn) => {
+    btn.disabled = true;
+    try { await backend.resolveRequest(shopId, id, ok, { by: user.name }); toast(ok ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'); viewApprove(); drawHeader(); markNav(); }
+    catch (e) { toast(e.message); btn.disabled = false; }
+  };
+  $$('[data-ok]').forEach((b) => b.addEventListener('click', () => act(b.dataset.ok, true, b)));
+  $$('[data-no]').forEach((b) => b.addEventListener('click', () => act(b.dataset.no, false, b)));
 }
 
 // ---------------- customers ----------------

@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -69,4 +69,19 @@ assert.equal(s.paid, 2982.82); assert.equal(s.credit, 400);
 data.products.push({ code: '000004', name: 'ปุ๋ยไม่มีราคา', unit: 'ถุง', price: 0, stock: 0 });
 assert.throws(() => createSale(data, settings, { type: 'cash', lines: [{ code: '000004', qty: 1 }] }), /ใส่ราคา/);
 assert.equal(createSale(data, settings, { type: 'cash', lines: [{ code: '000004', qty: 1, price: 99 }] }).total, 99);
+// Editing an unpaid credit bill: return 2 sacks, stock comes back, principal follows the new total
+const e1 = createSale(data, settings, { date: '2026-11-20', type: 'credit', customerCode: '019', rate: 2, lines: [{ code: '000001', qty: 5 }] });
+const stockBefore = data.products[0].stock;
+const ed = editBill(data.products, e1, { lines: [{ code: '000001', qty: 3, price: 1050 }, { code: '000003', qty: 1, price: 400 }], discount: 0, rate: 1.5 }, { by: 'แม่', reason: 'คืนของ' });
+assert.equal(ed.bill.total, 3550); assert.equal(ed.bill.principalLeft, 3550); assert.equal(ed.bill.edits, 1); assert.equal(ed.bill.rate, 1.5);
+assert.equal(ed.stock.get('000001'), 2); assert.equal(ed.stock.has('000003'), false);
+assert.equal(ed.bill.editHistory[0].before.total, 5250);
+assert.deepEqual(diffLines(e1.lines, ed.bill.lines).map((d) => d.kind).sort(), ['add', 'change']);
+assert.equal(data.products[0].stock, stockBefore); // pure: nothing mutated
+// Cancelling returns all stock
+const cn = cancelBill(data.products, e1, { by: 'แม่' });
+assert.equal(cn.bill.status, 'cancelled'); assert.equal(cn.stock.get('000001'), 5);
+// A credit bill that already got a payment is locked
+assert.match(billLockReason(data.bills.find((x) => x.no === a.no)), /รับชำระ/);
+assert.throws(() => editBill(data.products, data.bills.find((x) => x.no === a.no), { lines: [] }), /รับชำระ/);
 console.log('ALL SHOP CHECKS PASSED');

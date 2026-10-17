@@ -5,7 +5,7 @@
 //   shops/{shopId}/customers|products|bills|receipts|counters/{id}
 import * as fb from './firebase.bundle.js';
 import { firebaseConfig } from './firebase-config.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso, editBill, cancelBill } from './shop.js';
 import { addDays } from './interest.js';
 
 export const mode = 'cloud';
@@ -103,14 +103,15 @@ let data = null;
 export function closeShop() { unsubs.forEach((u) => u()); unsubs = []; data = null; }
 export async function openShop(shopId, onChange) {
   closeShop();
-  data = { customers: [], products: [], bills: [], receipts: [] };
+  data = { customers: [], products: [], bills: [], receipts: [], requests: [] };
   const settingsBox = { value: { ...DEFAULT_SETTINGS } };
-  const maps = { customers: new Map(), products: new Map(), billsOpen: new Map(), billsRecent: new Map(), receipts: new Map() };
+  const maps = { customers: new Map(), products: new Map(), billsOpen: new Map(), billsRecent: new Map(), receipts: new Map(), requests: new Map() };
   const rebuild = () => {
     data.customers = [...maps.customers.values()];
     data.products = [...maps.products.values()];
     data.bills = [...new Map([...maps.billsRecent, ...maps.billsOpen]).values()];
     data.receipts = [...maps.receipts.values()];
+    data.requests = [...maps.requests.entries()].map(([id, r]) => ({ id, ...r }));
   };
   let timer = null, ready = false;
   const changed = () => { rebuild(); if (ready) { clearTimeout(timer); timer = setTimeout(() => onChange?.(), 250); } };
@@ -137,6 +138,7 @@ export async function openShop(shopId, onChange) {
     listen(fb.query(sub(shopId, 'bills'), fb.where('status', '==', 'open')), 'billsOpen'),
     listen(fb.query(sub(shopId, 'bills'), fb.where('date', '>=', cutoff)), 'billsRecent'),
     listen(fb.query(sub(shopId, 'receipts'), fb.where('date', '>=', cutoff)), 'receipts'),
+    listen(fb.query(sub(shopId, 'requests'), fb.where('status', '==', 'pending')), 'requests'),
   ]);
   rebuild(); ready = true;
   return { data, get settings() { return settingsBox.value; } };
@@ -267,4 +269,38 @@ export async function changeMyPin(oldPin, newPin) {
   const cred = fb.EmailAuthProvider.credential(auth.currentUser.email, String(oldPin));
   await wrap(() => fb.reauthenticateWithCredential(auth.currentUser, cred));
   await wrap(() => fb.updatePassword(auth.currentUser, String(newPin)));
+}
+
+// ---------- bill edits / cancels and requests ----------
+// Re-reads the bill inside the transaction so an edit can't clash with a payment made on another device.
+async function billChangeTx(tx, shopId, billNo, kind, changes, meta) {
+  const ref = sub(shopId, 'bills', billNo);
+  const snap = await tx.get(ref);
+  if (!snap.exists()) throw new Error('ไม่พบบิล ' + billNo);
+  const res = kind === 'cancel' ? cancelBill(data.products, snap.data(), meta) : editBill(data.products, snap.data(), changes, meta);
+  return () => {
+    tx.set(ref, res.bill);
+    for (const [code, d] of res.stock) tx.update(sub(shopId, 'products', code), { stock: fb.increment(d) });
+    return res.bill;
+  };
+}
+export async function commitBillChange(shopId, billNo, kind, changes, meta) {
+  return wrap(() => fb.runTransaction(db, async (tx) => (await billChangeTx(tx, shopId, billNo, kind, changes, { ...meta, by: meta.by || me.name }))()));
+}
+export async function createRequest(shopId, req) {
+  const ref = fb.doc(sub(shopId, 'requests'));
+  const r = { status: 'pending', createdAt: new Date().toISOString(), byUid: me.uid, ...req };
+  await wrap(() => fb.setDoc(ref, r));
+  return { id: ref.id, ...r };
+}
+export async function resolveRequest(shopId, id, approve, meta) {
+  return wrap(() => fb.runTransaction(db, async (tx) => {
+    const ref = sub(shopId, 'requests', id);
+    const s = await tx.get(ref);
+    if (!s.exists() || s.data().status !== 'pending') throw new Error('คำขอนี้ถูกจัดการไปแล้ว');
+    const r = s.data();
+    const write = approve ? await billChangeTx(tx, shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason }) : null;
+    write?.();
+    tx.update(ref, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by || me.name, resolvedAt: new Date().toISOString() });
+  }));
 }

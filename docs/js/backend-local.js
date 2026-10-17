@@ -1,7 +1,7 @@
 // Offline test backend: one shop kept in this browser (IndexedDB). Open the program with ?local=1 to use it.
 // Same functions as backend-cloud.js so the screens don't care which one is running.
 import { getData, saveData, getSettings, saveSettings as storeSettings } from './store.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill } from './shop.js';
 
 export const mode = 'local';
 const USER = { uid: 'local', code: 'local', name: 'ทดสอบ (เครื่องนี้)', role: 'admin', shops: ['local'], active: true };
@@ -22,6 +22,7 @@ export async function createShop() { throw new Error('โหมดทดสอ�
 export async function openShop(shopId, onChange) {
   data = await getData();
   data.receipts ||= [];
+  data.requests ||= [];
   const settings = await getSettings(DEFAULT_SETTINGS);
   return { data, settings, onChange };
 }
@@ -68,3 +69,26 @@ export async function listUsers() { return [USER]; }
 export async function createUser() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }
 export async function setUserActive() {}
 export async function changeMyPin() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }
+
+// ---------- bill edits / cancels and requests ----------
+function applyStock(stock) {
+  for (const [code, d] of stock) { const p = data.products.find((x) => x.code === code); if (p) p.stock = Math.round(((p.stock || 0) + d) * 100) / 100; }
+}
+export async function commitBillChange(shopId, billNo, kind, changes, meta) {
+  const i = data.bills.findIndex((b) => b.no === billNo);
+  const res = kind === 'cancel' ? cancelBill(data.products, data.bills[i], meta) : editBill(data.products, data.bills[i], changes, meta);
+  data.bills[i] = res.bill; applyStock(res.stock);
+  await saveData(data);
+  return res.bill;
+}
+export async function createRequest(shopId, req) {
+  const r = { id: 'r' + Date.now(), status: 'pending', createdAt: new Date().toISOString(), ...req };
+  data.requests.push(r); await saveData(data); return r;
+}
+export async function resolveRequest(shopId, id, approve, meta) {
+  const r = data.requests.find((x) => x.id === id);
+  if (!r || r.status !== 'pending') throw new Error('คำขอนี้ถูกจัดการไปแล้ว');
+  if (approve) await commitBillChange(shopId, r.billNo, r.kind, r.changes, { by: r.byName, reason: r.reason });
+  Object.assign(r, { status: approve ? 'approved' : 'rejected', resolvedBy: meta.by, resolvedAt: new Date().toISOString() });
+  await saveData(data);
+}

@@ -160,3 +160,76 @@ export function daySummary(data, iso) {
   const paid = round2(receipts.reduce((s, r) => s + (r.total || 0), 0));
   return { bills: bills.length, cash, credit, receipts: receipts.length, paid, moneyIn: round2(cash + paid) };
 }
+
+// ---------- editing / cancelling a saved bill ----------
+// A credit bill that has already received any payment can't be changed (the receipts would no longer add up).
+export function billLockReason(b) {
+  if (!b) return 'ไม่พบบิล';
+  if (b.status === 'cancelled') return 'บิลนี้ถูกยกเลิกแล้ว';
+  if (b.type === 'credit' && (b.status === 'paid' || (b.principalLeft ?? b.total) < b.total || b.interestFrom || b.receiptNo))
+    return 'บิลเงินเชื่อที่รับชำระไปแล้ว (บางส่วนหรือทั้งหมด) แก้ไขหรือยกเลิกไม่ได้';
+  return null;
+}
+
+const snapshot = (b) => ({ lines: b.lines, subtotal: b.subtotal, discount: b.discount, total: b.total, rate: b.rate, graceDays: b.graceDays });
+
+// changes: { lines: [{code, qty, price, name?, unit?}], discount, rate, graceMonths }
+// Returns the new bill and the stock change per product (+ = goes back into stock).
+export function editBill(products, bill, changes, { by = '', reason = '', at = new Date().toISOString() } = {}) {
+  const lock = billLockReason(bill); if (lock) throw new Error(lock);
+  const prodBy = new Map(products.map((p) => [p.code, p]));
+  const oldLine = new Map(bill.lines.map((l) => [l.code, l]));
+  const lines = (changes.lines || []).filter((l) => l.code && Number(l.qty) > 0).map((l) => {
+    const p = prodBy.get(l.code), o = oldLine.get(l.code);
+    if (!p && !o) throw new Error('ไม่พบสินค้ารหัส ' + l.code);
+    const qty = Number(l.qty), price = Number(l.price ?? p?.price ?? o?.price);
+    return { code: l.code, name: p?.name || o?.name, unit: p?.unit || o?.unit, qty, price, amount: round2(qty * price), date: bill.date };
+  });
+  if (!lines.length) throw new Error('บิลต้องมีอย่างน้อย 1 รายการ ถ้าคืนทั้งหมดให้ใช้ "ยกเลิกบิล"');
+  const noPrice = lines.find((l) => !(l.price > 0));
+  if (noPrice) throw new Error(`ใส่ราคาของ "${noPrice.name}" ก่อน`);
+  const subtotal = round2(lines.reduce((s, l) => s + l.amount, 0));
+  const discount = round2(Number(changes.discount) || 0);
+  if (discount < 0 || discount > subtotal) throw new Error('ส่วนลดไม่ถูกต้อง');
+  const total = round2(subtotal - discount);
+  const credit = bill.type === 'credit';
+  const next = {
+    ...bill, lines, subtotal, discount, total,
+    rate: credit ? Number(changes.rate ?? bill.rate) : 0,
+    graceDays: credit ? (changes.graceMonths != null ? Number(changes.graceMonths) * 30 : bill.graceDays || 0) : 0,
+    principalLeft: credit ? total : 0,
+    status: credit ? (total > 0 ? 'open' : 'paid') : bill.status,
+    edits: (bill.edits || 0) + 1,
+    editHistory: [...(bill.editHistory || []), { at, by, reason, before: snapshot(bill) }],
+  };
+  const stock = new Map();
+  const qtyOf = (ls) => { const m = new Map(); for (const l of ls) m.set(l.code, (m.get(l.code) || 0) + l.qty); return m; };
+  const before = qtyOf(bill.lines), after = qtyOf(lines);
+  for (const code of new Set([...before.keys(), ...after.keys()])) {
+    const p = prodBy.get(code); if (!p || p.noStock) continue;
+    const d = round2((before.get(code) || 0) - (after.get(code) || 0));
+    if (d) stock.set(code, d);
+  }
+  return { bill: next, stock };
+}
+
+export function cancelBill(products, bill, { by = '', reason = '', at = new Date().toISOString() } = {}) {
+  const lock = billLockReason(bill); if (lock) throw new Error(lock);
+  const prodBy = new Map(products.map((p) => [p.code, p]));
+  const stock = new Map();
+  for (const l of bill.lines) { const p = prodBy.get(l.code); if (p && !p.noStock) stock.set(l.code, round2((stock.get(l.code) || 0) + l.qty)); }
+  return { bill: { ...bill, status: 'cancelled', principalLeft: 0, cancelledAt: at, cancelledBy: by, cancelReason: reason }, stock };
+}
+
+// Describe what an edit changes, for the approval screen.
+export function diffLines(oldLines, newLines) {
+  const o = new Map(oldLines.map((l) => [l.code, l])), n = new Map(newLines.map((l) => [l.code, l]));
+  const out = [];
+  for (const [code, l] of n) {
+    const p = o.get(code);
+    if (!p) out.push({ kind: 'add', name: l.name, qty: l.qty, price: l.price });
+    else if (p.qty !== l.qty || p.price !== l.price) out.push({ kind: 'change', name: l.name, from: `${p.qty} × ${p.price}`, to: `${l.qty} × ${l.price}` });
+  }
+  for (const [code, l] of o) if (!n.has(code)) out.push({ kind: 'remove', name: l.name, qty: l.qty });
+  return out;
+}
