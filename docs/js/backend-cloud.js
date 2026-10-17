@@ -1,5 +1,5 @@
 // Online backend: Firebase Auth (code + PIN) and Firestore (one area per shop).
-//   users/{uid}                 { code, name, role: admin|owner|staff|secretary, shops: [shopId], active }
+//   users/{uid}                 { code, name, role: admin|owner|staff, shops: [shopId], active }
 //   config/main                 { adminUid }  — first super-admin, created once
 //   shops/{shopId}              shop settings (name, address, bill prefix, default rate, …)
 //   shops/{shopId}/customers|products|bills|receipts|counters/{id}

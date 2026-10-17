@@ -18,9 +18,10 @@ const thDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-');
 const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
-const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'เลขา' };
-// The super-admin can preview the program as an owner / staff / secretary sees it (to check before a shop goes live).
+const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'พนักงาน' };
+// The super-admin can preview the program as an owner / staff member sees it (to check before a shop goes live).
 let viewAs = lsGetSafe('viewAs') || '';
+if (viewAs === 'secretary') viewAs = 'staff';
 function lsGetSafe(k) { try { return localStorage.getItem(k); } catch { return null; } }
 const role = () => (user?.role === 'admin' && viewAs ? viewAs : user?.role);
 const previewing = () => user?.role === 'admin' && !!viewAs;
@@ -45,7 +46,7 @@ function drawHeader() {
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || 'ระบบหน้าร้าน') : 'ระบบหน้าร้าน';
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
-    ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน'], ['secretary', 'เลขา']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
+    ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
     ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
   $('#switchShop')?.addEventListener('click', () => { leaveShop(); viewShopPicker(); });
@@ -669,7 +670,7 @@ async function viewUsers() {
   const shopLabel = (id) => shops.find((s) => s.id === id)?.label || id;
   const asAdmin = role() === 'admin';
   const myShops = asAdmin ? shops : shops.filter((s) => s.id === shopId || user.shops?.includes(s.id));
-  const roles = asAdmin ? ['owner', 'staff', 'secretary', 'admin'] : ['staff', 'secretary'];
+  const roles = asAdmin ? ['owner', 'staff', 'admin'] : ['staff'];
   if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
   view.innerHTML = `<section class="card">
     <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2>${backend.mode === 'cloud' ? '<button class="btn primary" id="addu">+ เพิ่มรหัส</button>' : ''}</div>
