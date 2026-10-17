@@ -1,0 +1,19 @@
+{
+  "name": "kaset-shop",
+  "private": true,
+  "type": "module",
+  "description": "ระบบขายหน้าร้าน (แทนโปรแกรม programkaset) — GitHub Pages + Firebase",
+  "scripts": {
+    "build": "esbuild src/importer-entry.js --bundle --format=esm --platform=browser --outfile=docs/js/importer.bundle.js --alias:stream=stream-browserify --inject:build/shim.js --define:global=globalThis --minify",
+    "test": "node test/import.test.mjs"
+  },
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.2",
+    "events": "^3.3.0",
+    "mdb-reader": "^3.2.0",
+    "process": "^0.11.10",
+    "stream-browserify": "^3.0.0",
+    "util": "^0.12.5"
+  }
+}

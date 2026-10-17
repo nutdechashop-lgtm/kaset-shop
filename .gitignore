@@ -1,0 +1,9 @@
+node_modules/
+# never commit shop data or backups
+*.mdb
+*.MDB
+*.ldb
+*.cha
+*.CHA
+*.bak
+backup/
