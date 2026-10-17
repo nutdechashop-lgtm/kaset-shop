@@ -19,7 +19,14 @@ const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
 const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'เลขา' };
-const isManager = () => user && (user.role === 'admin' || user.role === 'owner');
+// The super-admin can preview the program as an owner / staff / secretary sees it (to check before a shop goes live).
+let viewAs = lsGetSafe('viewAs') || '';
+function lsGetSafe(k) { try { return localStorage.getItem(k); } catch { return null; } }
+const role = () => (user?.role === 'admin' && viewAs ? viewAs : user?.role);
+const previewing = () => user?.role === 'admin' && !!viewAs;
+const isManager = () => ['admin', 'owner'].includes(role());
+// Shop settings belong to the shop owner; the super-admin only looks.
+const canEditSettings = () => user?.role === 'owner' || backend.mode === 'local';
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
 
@@ -38,9 +45,18 @@ function drawHeader() {
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || 'ระบบหน้าร้าน') : 'ระบบหน้าร้าน';
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
+    ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน'], ['secretary', 'เลขา']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
     ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
   $('#switchShop')?.addEventListener('click', () => { leaveShop(); viewShopPicker(); });
+  $('#viewAs')?.addEventListener('change', (e) => { viewAs = e.target.value; lsSet('viewAs', viewAs); render(); });
+  $('#previewBar')?.remove();
+  if (inShop && previewing()) {
+    const bar = document.createElement('div'); bar.id = 'previewBar'; bar.className = 'preview-bar';
+    bar.innerHTML = `<div class="wrap app-wrap" style="padding-block:8px;flex-direction:row;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>กำลังดูหน้าจอแบบที่ <b>${ROLE[viewAs]}</b> เห็น · ถ้าบันทึกรายการ จะบันทึกจริงในชื่อของคุณ</span><button class="btn small" id="exitPreview">กลับมุมมองแอดมิน</button></div>`;
+    $('header.topbar').after(bar);
+    $('#exitPreview').onclick = () => { viewAs = ''; lsSet('viewAs', ''); render(); };
+  }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
 const routes = { sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
@@ -118,13 +134,13 @@ async function viewShopPicker() {
       <span><b>${esc(s.label || s.name || s.id)}</b> <span class="muted">${esc(s.name && s.label ? s.name : '')}</span></span><span class="mono muted">${esc(s.prefix || '')}${s.id === last ? ' · ล่าสุด' : ''}</span></button>`).join('')}</div>`
       : '<div class="muted">ยังไม่มีร้าน เพิ่มร้านแรกด้านล่าง</div>'}
     ${user.role === 'admin' ? `<form id="nf" class="row" style="margin-top:8px"><input type="text" name="label" placeholder="ชื่อเรียกร้าน เช่น ร้านปุ๋ย" required style="flex:1;min-width:200px"><button class="btn primary">+ เพิ่มร้าน</button></form>
-      <div class="muted" style="font-size:13px">ชื่อเต็ม ที่อยู่ หัวบิล ไปตั้งในเมนู "ตั้งค่าร้าน" หลังเข้าร้าน</div>` : ''}
+      <div class="muted" style="font-size:13px">เพิ่มร้านแล้วสร้างรหัสเจ้าของร้าน · เจ้าของร้านเป็นคนตั้งชื่อร้าน ที่อยู่ และหัวบิลเอง</div>` : ''}
     <div class="err hidden" id="perr"></div>
   </section>`;
   $$('[data-shop]').forEach((b) => b.addEventListener('click', () => enterShop(b.dataset.shop)));
   $('#nf')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { const id = await backend.createShop({ label: e.target.label.value }); shops = await backend.listShops(); location.hash = 'settings'; enterShop(id); }
+    try { const id = await backend.createShop({ label: e.target.label.value }); shops = await backend.listShops(); location.hash = 'users'; enterShop(id); toast('เพิ่มร้านแล้ว ต่อไปสร้างรหัสเจ้าของร้าน'); }
     catch (ex) { $('#perr').textContent = ex.message; $('#perr').classList.remove('hidden'); }
   });
 }
@@ -137,7 +153,7 @@ async function enterShop(id) {
   shopId = id; data = shop.data; settings = shop.settings;
   lsSet('lastShop', id);
   resetCart();
-  if (!settings.name && isManager() && !location.hash) location.hash = 'settings';
+  if (!settings.name && canEditSettings() && !location.hash) location.hash = 'settings';
   render();
 }
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
@@ -651,15 +667,17 @@ async function viewUsers() {
   let users;
   try { users = await backend.listUsers(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const shopLabel = (id) => shops.find((s) => s.id === id)?.label || id;
-  const myShops = user.role === 'admin' ? shops : shops.filter((s) => user.shops.includes(s.id));
-  const roles = user.role === 'admin' ? ['staff', 'secretary', 'owner', 'admin'] : ['staff', 'secretary'];
+  const asAdmin = role() === 'admin';
+  const myShops = asAdmin ? shops : shops.filter((s) => s.id === shopId || user.shops?.includes(s.id));
+  const roles = asAdmin ? ['owner', 'staff', 'secretary', 'admin'] : ['staff', 'secretary'];
+  if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
   view.innerHTML = `<section class="card">
     <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2>${backend.mode === 'cloud' ? '<button class="btn primary" id="addu">+ เพิ่มรหัส</button>' : ''}</div>
     <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ</th><th></th></tr>
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
       <td>${u.active ? '<span class="pill cash">ใช้งาน</span>' : '<span class="pill cancel">ปิด</span>'}</td>
-      <td>${u.uid !== user.uid && (user.role === 'admin' || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}</td></tr>`).join('')}
+      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
   </section>
@@ -802,8 +820,10 @@ async function viewImport() {
 
 // ---------------- settings ----------------
 function viewSettings() {
+  const editable = canEditSettings();
   view.innerHTML = `<section class="card">
     <h2>ตั้งค่าร้าน</h2>
+    ${editable ? '' : `<div class="note">${user.role === 'admin' ? (settings.name ? 'เจ้าของร้านเป็นคนตั้งค่าหน้านี้ แอดมินใหญ่ดูได้อย่างเดียว' : 'ร้านนี้ยังไม่ได้ตั้งค่า · สร้างรหัสเจ้าของร้านที่เมนู "รหัสพนักงาน" แล้วให้เจ้าของร้านเข้ามาตั้งเอง') : 'เฉพาะเจ้าของร้านแก้ได้'}</div>`}
     <form id="sf" style="display:flex;flex-direction:column;gap:12px">
       <label class="field">ชื่อเรียกร้าน (ใช้ในระบบ เช่น ร้านปุ๋ย)<input type="text" name="label" value="${esc(settings.label)}"></label>
       <label class="field">ชื่อร้าน (หัวบิล)<input type="text" name="name" value="${esc(settings.name)}" required></label>
@@ -818,7 +838,7 @@ function viewSettings() {
       </div>
       <label class="field">ปลอดดอกเริ่มต้น (บิลงานขาย)<select name="defaultGraceMonths">${GRACE_MONTHS.map((m) => `<option value="${m}" ${m === settings.defaultGraceMonths ? 'selected' : ''}>${m} เดือน</option>`).join('')}</select></label>
       <div class="muted" style="font-size:14px">ตัวอย่างเลขที่บิล: <span class="mono" id="pfx"></span></div>
-      <div class="row"><button class="btn primary">บันทึก</button></div>
+      ${editable ? '<div class="row"><button class="btn primary">บันทึก</button></div>' : ''}
     </form>
   </section>
   <section class="card">
@@ -831,10 +851,12 @@ function viewSettings() {
     ${backend.mode === 'local' ? '<div class="note">โหมดทดสอบ: ข้อมูลเก็บในเบราว์เซอร์ของเครื่องนี้เท่านั้น</div>' : ''}
   </section>`;
   const f = $('#sf');
+  if (!editable) $$('input, textarea, select', f).forEach((el) => { el.disabled = true; });
   const ex = () => { const t = todayIso(); $('#pfx').textContent = (f.prefix.value.trim() ? f.prefix.value.trim() + '-' : '') + 'BS' + String(+t.slice(0, 4) + 543).slice(2) + t.slice(5, 7) + t.slice(8) + '0001'; };
   f.prefix.addEventListener('input', ex); ex();
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!canEditSettings()) return;
     const v = Object.fromEntries(new FormData(f));
     const next = { ...settings, label: v.label.trim(), name: v.name.trim(), address: v.address.trim(), phone: v.phone.trim(), taxId: v.taxId.trim(), prefix: v.prefix.trim(), defaultRate: Number(v.defaultRate), defaultGraceMonths: Number(v.defaultGraceMonths) };
     try { await backend.saveSettings(shopId, next); } catch (ex2) { toast(ex2.message); return; }

@@ -124,3 +124,7 @@ td.mono, td .mono, td .btn.link { white-space: nowrap; }
 .who { font-size: 14px; color: var(--nav-muted); gap: 8px; }
 .btn.hdr { background: transparent; color: var(--nav-text); border-color: rgba(255,255,255,.3); }
 .topbar .pill { background: rgba(255,255,255,.12); color: var(--nav-text); }
+.hdr-select { min-height: 38px; background: transparent; color: var(--nav-text); border-color: rgba(255,255,255,.3); padding: 0 8px; }
+.hdr-select option { color: #1C1F1A; }
+.preview-bar { background: var(--orange-soft); color: var(--note-ink); border-bottom: 1px solid var(--note-line); font-size: 14px; }
+input:disabled, textarea:disabled, select:disabled { opacity: .75; cursor: not-allowed; }
