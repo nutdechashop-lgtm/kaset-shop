@@ -21,13 +21,22 @@ export function todayIso(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// Same numbering as the old program: <prefix>-<kind><BE yy><mm><dd><running 4 digits per day>
-export function docNo(prefix, kind, iso, existingNos) {
+// Day prefix of a document number, e.g. 01-BS691017
+export function docHead(prefix, kind, iso) {
   const [y, m, d] = iso.split('-');
-  const head = `${prefix ? prefix + '-' : ''}${kind}${String(+y + 543).slice(2)}${m}${d}`;
+  return `${prefix ? prefix + '-' : ''}${kind}${String(+y + 543).slice(2)}${m}${d}`;
+}
+// Highest running number already used for that day
+export function maxRunning(head, existingNos) {
   let max = 0;
   for (const n of existingNos) if (n && n.startsWith(head)) { const s = parseInt(n.slice(head.length), 10); if (s > max) max = s; }
-  return head + String(max + 1).padStart(4, '0');
+  return max;
+}
+
+// Same numbering as the old program: <prefix>-<kind><BE yy><mm><dd><running 4 digits per day>
+export function docNo(prefix, kind, iso, existingNos) {
+  const head = docHead(prefix, kind, iso);
+  return head + String(maxRunning(head, existingNos) + 1).padStart(4, '0');
 }
 
 export function nextCustomerCode(customers) {
@@ -51,7 +60,7 @@ export function zones(customers) {
 
 // Save a sale. input: { date, type: 'cash'|'credit', customerCode, lines: [{code, qty, price}], discount, rate, graceMonths, by, note }
 // Mutates data (adds the bill, deducts stock) and returns the new bill.
-export function createSale(data, settings, input) {
+export function createSale(data, settings, input, opts = {}) {
   const date = input.date || todayIso();
   const type = input.type === 'credit' ? 'credit' : 'cash';
   const prodBy = new Map(data.products.map((p) => [p.code, p]));
@@ -72,7 +81,7 @@ export function createSale(data, settings, input) {
   const total = round2(subtotal - discount);
   const graceMonths = type === 'credit' ? Number(input.graceMonths) || 0 : 0;
   const bill = {
-    no: docNo(settings.prefix, 'BS', date, data.bills.map((b) => b.no)),
+    no: opts.no || docNo(settings.prefix, 'BS', date, data.bills.map((b) => b.no)),
     series: 'BS', date, type, customerCode: input.customerCode || '',
     rate: type === 'credit' ? Number(input.rate ?? settings.defaultRate) : 0,
     graceDays: graceMonths * 30,
@@ -107,7 +116,7 @@ export function customerDebts(data, asOf) {
 // Receive a debt payment.
 // input: { customerCode, date, mode: 'amount'|'bills', amount, billNos, by }
 // Interest first, then principal, oldest bill first. Mutates the bills and returns the receipt.
-export function receivePayment(data, settings, input) {
+export function receivePayment(data, settings, input, opts = {}) {
   const date = input.date || todayIso();
   const open = data.bills.filter((b) => b.customerCode === input.customerCode && b.type === 'credit' && b.status === 'open');
   if (!open.length) throw new Error('ลูกค้ารายนี้ไม่มียอดค้าง');
@@ -122,7 +131,7 @@ export function receivePayment(data, settings, input) {
   }
   const rows = res.rows.filter((r) => r.payInterest > 0 || r.payPrincipal > 0);
   if (!rows.length) throw new Error('ไม่มีบิลที่ถูกชำระ');
-  const no = docNo(settings.prefix, 'RP', date, data.receipts.map((r) => r.no));
+  const no = opts.no || docNo(settings.prefix, 'RP', date, data.receipts.map((r) => r.no));
   const byNo = new Map(res.updated.map((b) => [b.no, b]));
   for (let i = 0; i < data.bills.length; i++) {
     const u = byNo.get(data.bills[i].no);

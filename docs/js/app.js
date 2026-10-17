@@ -1,9 +1,12 @@
-// Main program: sales, debtors & payments, bill search, customers, products, shop settings.
-import { getData, saveData, getSettings, saveSettings } from './store.js';
-import { RATES, GRACE_MONTHS, DEFAULT_SETTINGS, todayIso, createSale, customerDebts, receivePayment, nextCustomerCode, nextProductCode, zones, daySummary } from './shop.js';
+// Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
+// staff codes, import from the old program, shop settings.
+// Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
+import { RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 
-let data, settings;
+const backend = await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js');
+
+let user = null, shops = [], shopId = null, shop = null, data = null, settings = null;
 const view = document.getElementById('view');
 const dlg = document.getElementById('dlg');
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -15,25 +18,129 @@ const thDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-');
 const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
+const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'เลขา' };
+const isManager = () => user && (user.role === 'admin' || user.role === 'owner');
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } };
 
 function toast(msg) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; t.setAttribute('role', 'status');
   document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
 }
-async function persist() { await saveData(data); }
 
-// ---------------- routing ----------------
-const routes = { sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, settings: viewSettings };
+// ---------------- header / routing ----------------
+const NAV = [
+  ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า / สต๊อก'],
+  ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['settings', 'ตั้งค่าร้าน', true],
+];
+function drawHeader() {
+  const inShop = !!shop;
+  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}</a>`).join('') : '';
+  $('#shopName').textContent = inShop ? (settings.name || settings.label || 'ระบบหน้าร้าน') : 'ระบบหน้าร้าน';
+  $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
+    ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
+    ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
+  $('#switchShop')?.addEventListener('click', () => { leaveShop(); viewShopPicker(); });
+  $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
+}
+const routes = { sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+let current = 'sale';
 function render() {
-  const [name, arg] = (location.hash.slice(1) || 'sale').split('/');
-  const fn = routes[name] || viewSale;
-  $$('#nav a').forEach((a) => a.toggleAttribute('aria-current', a.getAttribute('href') === '#' + (routes[name] ? name : 'sale')));
-  $$('#nav a').forEach((a) => { if (a.hasAttribute('aria-current')) a.setAttribute('aria-current', 'page'); });
-  $('#shopName').textContent = settings.name || 'ระบบหน้าร้าน';
+  if (!shop) return;
+  let [name, arg] = (location.hash.slice(1) || 'sale').split('/');
+  if (!routes[name] || (NAV.find((n) => n[0] === name)?.[2] && !isManager())) name = 'sale';
+  current = name;
+  drawHeader();
+  $$('#nav a').forEach((a) => { if (a.getAttribute('href') === '#' + name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   $('#today').textContent = 'วันที่ ' + thDate(todayIso());
-  fn(arg ? decodeURIComponent(arg) : undefined);
+  routes[name](arg ? decodeURIComponent(arg) : undefined);
 }
 window.addEventListener('hashchange', render);
+
+// Data changed on another device: refresh list screens (never while someone is typing or a dialog is open).
+function onRemoteChange(kind) {
+  if (kind === 'settings') { settings = shop.settings; drawHeader(); return; }
+  if (dlg.open || ['sale', 'import', 'settings', 'users'].includes(current)) return;
+  const a = document.activeElement;
+  if (a && view.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.value) return;
+  render();
+}
+
+// ---------------- sign in & shop picker ----------------
+async function start() {
+  view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลด…</div></div>';
+  user = await backend.init();
+  drawHeader();
+  if (!user) return viewLogin();
+  viewShopPicker();
+}
+
+async function viewLogin() {
+  drawHeader();
+  const firstRun = await backend.bootstrapNeeded();
+  view.innerHTML = `<section class="card" style="max-width:420px;margin:24px auto;width:100%">
+    ${firstRun ? `<h2>ตั้งค่าครั้งแรก: สร้างรหัสแอดมินใหญ่</h2>
+      <div class="muted" style="font-size:14px">ทำครั้งเดียว รหัสนี้เห็นทุกร้าน และใช้สร้างรหัสให้เจ้าของร้านและพนักงาน</div>` : '<h2>เข้าสู่ระบบ</h2>'}
+    <form id="lf" style="display:flex;flex-direction:column;gap:12px">
+      <label class="field">รหัส<input type="text" name="code" autocomplete="username" required value="${esc(firstRun ? '' : lsGet('lastCode') || '')}" style="font-family:var(--mono);font-size:20px"></label>
+      ${firstRun ? '<label class="field">ชื่อ<input type="text" name="name" required></label>' : ''}
+      <label class="field">PIN 6 หลัก<input type="password" name="pin" inputmode="numeric" maxlength="6" autocomplete="current-password" required style="font-family:var(--mono);font-size:20px;letter-spacing:6px"></label>
+      ${firstRun ? '<label class="field">PIN อีกครั้ง<input type="password" name="pin2" inputmode="numeric" maxlength="6" required style="font-family:var(--mono);font-size:20px;letter-spacing:6px"></label>' : ''}
+      <div class="err hidden" id="lerr"></div>
+      <button class="btn primary" style="justify-content:center">${firstRun ? 'สร้างรหัสแอดมิน' : 'เข้าสู่ระบบ'}</button>
+    </form></section>`;
+  const f = $('#lf');
+  (f.code.value ? f.pin : f.code).focus();
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('button', f), err = $('#lerr'); err.classList.add('hidden'); btn.disabled = true;
+    try {
+      if (firstRun) {
+        if (f.pin.value !== f.pin2.value) throw new Error('PIN สองช่องไม่ตรงกัน');
+        user = await backend.setupAdmin({ code: f.code.value, name: f.name.value, pin: f.pin.value });
+      } else user = await backend.signIn(f.code.value, f.pin.value);
+      lsSet('lastCode', f.code.value.trim());
+      viewShopPicker();
+    } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); btn.disabled = false; }
+  });
+}
+
+async function viewShopPicker() {
+  drawHeader();
+  view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดร้าน…</div></div>';
+  try { shops = await backend.listShops(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const last = lsGet('lastShop');
+  if (shops.length === 1 && user.role !== 'admin') return enterShop(shops[0].id);
+  if (!shops.length && user.role !== 'admin') { view.innerHTML = '<div class="note">รหัสนี้ยังไม่ได้ผูกกับร้านไหน ติดต่อแอดมิน</div>'; return; }
+  view.innerHTML = `<section class="card" style="max-width:640px;margin:0 auto;width:100%">
+    <h2>เลือกร้าน</h2>
+    ${shops.length ? `<div style="display:flex;flex-direction:column;gap:8px">${shops.map((s) => `<button class="btn" data-shop="${esc(s.id)}" style="justify-content:space-between;min-height:60px">
+      <span><b>${esc(s.label || s.name || s.id)}</b> <span class="muted">${esc(s.name && s.label ? s.name : '')}</span></span><span class="mono muted">${esc(s.prefix || '')}${s.id === last ? ' · ล่าสุด' : ''}</span></button>`).join('')}</div>`
+      : '<div class="muted">ยังไม่มีร้าน เพิ่มร้านแรกด้านล่าง</div>'}
+    ${user.role === 'admin' ? `<form id="nf" class="row" style="margin-top:8px"><input type="text" name="label" placeholder="ชื่อเรียกร้าน เช่น ร้านปุ๋ย" required style="flex:1;min-width:200px"><button class="btn primary">+ เพิ่มร้าน</button></form>
+      <div class="muted" style="font-size:13px">ชื่อเต็ม ที่อยู่ หัวบิล ไปตั้งในเมนู "ตั้งค่าร้าน" หลังเข้าร้าน</div>` : ''}
+    <div class="err hidden" id="perr"></div>
+  </section>`;
+  $$('[data-shop]').forEach((b) => b.addEventListener('click', () => enterShop(b.dataset.shop)));
+  $('#nf')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { const id = await backend.createShop({ label: e.target.label.value }); shops = await backend.listShops(); location.hash = 'settings'; enterShop(id); }
+    catch (ex) { $('#perr').textContent = ex.message; $('#perr').classList.remove('hidden'); }
+  });
+}
+
+async function enterShop(id) {
+  view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดข้อมูลร้าน…</div></div>';
+  try {
+    shop = await backend.openShop(id, onRemoteChange);
+  } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  shopId = id; data = shop.data; settings = shop.settings;
+  lsSet('lastShop', id);
+  resetCart();
+  if (!settings.name && isManager() && !location.hash) location.hash = 'settings';
+  render();
+}
+function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
 // ---------------- printing ----------------
 function shopHead() {
@@ -80,16 +187,18 @@ function openDialog(html, onSubmit) {
     const btn = e.submitter;
     if (!btn || btn.value === 'cancel') return;
     e.preventDefault();
+    btn.disabled = true;
     try { if (await onSubmit?.(form, btn.value) !== false) dlg.close(); }
     catch (err) { const m = $('.dlg-err', dlg); if (m) { m.textContent = err.message; m.classList.remove('hidden'); } else alert(err.message); }
+    finally { btn.disabled = false; }
   });
   dlg.showModal();
   return form;
 }
 
 // ---------------- sale ----------------
-const cart = { lines: [], type: 'cash', customerCode: '', rate: null, grace: false, graceMonths: null, discount: 0, note: '' };
-function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings.defaultRate, grace: false, graceMonths: settings.defaultGraceMonths, discount: 0 }); }
+const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0 };
+function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0 }); }
 
 function searchProducts(q) {
   const n = norm(q); if (!n) return [];
@@ -101,10 +210,9 @@ function searchCustomers(q) {
 }
 
 function viewSale() {
-  if (cart.rate == null) resetCart();
   const today = daySummary(data, todayIso());
   view.innerHTML = `
-  ${!data.products.length ? `<div class="note">ยังไม่มีสินค้าในเครื่องนี้ · <a href="import.html">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือเพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
+  ${!data.products.length ? `<div class="note">ยังไม่มีสินค้าในร้านนี้ · ${isManager() ? '<a href="#import">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือ' : ''} เพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
   <div class="grid-sale">
     <section class="card">
       <label class="field">ค้นหาสินค้า (พิมพ์ชื่อ แล้วกด Enter เพื่อเพิ่ม)
@@ -213,7 +321,6 @@ function viewSale() {
   });
   $('#lines').addEventListener('click', (e) => { const b = e.target.closest('[data-del]'); if (b) { cart.lines.splice(+b.dataset.del, 1); drawLines(); } });
 
-  // customer
   const cq = $('#cq'), cres = $('#cres');
   const debts = customerDebts(data, todayIso());
   function drawCust() {
@@ -239,11 +346,11 @@ function viewSale() {
   $('#clear').addEventListener('click', () => { resetCart(); viewSale(); });
   $('#save').addEventListener('click', async () => {
     const err = $('#saleErr'); err.classList.add('hidden');
+    const btn = $('#save'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> กำลังบันทึก…';
     let bill;
     try {
-      bill = createSale(data, settings, { type: cart.type, customerCode: cart.customerCode, lines: cart.lines, discount: cart.discount, rate: cart.rate, graceMonths: cart.type === 'credit' && cart.grace ? cart.graceMonths : 0 });
-      await persist();
-    } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); return; }
+      bill = await backend.commitSale(shopId, settings, { type: cart.type, customerCode: cart.customerCode, lines: cart.lines, discount: cart.discount, rate: cart.rate, graceMonths: cart.type === 'credit' && cart.grace ? cart.graceMonths : 0, by: user.name });
+    } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); btn.disabled = false; btn.textContent = 'บันทึกการขาย'; return; }
     resetCart(); viewSale();
     openDialog(`<h2>บันทึกการขายแล้ว</h2>
       <div>เลขที่ <b class="mono">${esc(bill.no)}</b> · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · <b>฿${money(bill.total)}</b></div>
@@ -264,7 +371,7 @@ function viewDebt(code) {
   const tot = rows.reduce((s, r) => ({ p: s.p + r.principal, i: s.i + r.interest, t: s.t + r.total, n: s.n + r.bills.length }), { p: 0, i: 0, t: 0, n: 0 });
   view.innerHTML = `
   <section class="card">
-    <div class="row" style="justify-content:space-between"><h2>ลูกหนี้ทั้งหมด ณ วันที่ ${thDate(asOf)}</h2></div>
+    <h2>ลูกหนี้ทั้งหมด ณ วันที่ ${thDate(asOf)}</h2>
     <div class="stats">
       <div class="stat"><div class="k">ลูกค้าที่ค้าง</div><div class="v">${rows.length}</div></div>
       <div class="stat"><div class="k">บิลค้าง</div><div class="v">${tot.n}</div></div>
@@ -293,7 +400,6 @@ function viewDebtor(code) {
   const asOf = todayIso();
   const c = data.customers.find((x) => x.code === code);
   const d = customerDebts(data, asOf).get(code);
-  const history = data.receipts.filter((r) => r.customerCode === code).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 10);
   let mode = 'amount';
   const selected = new Set();
   view.innerHTML = `
@@ -316,10 +422,17 @@ function viewDebtor(code) {
   </section>` : ''}
   <section class="card">
     <h2>ประวัติรับชำระ</h2>
-    ${history.length ? `<div class="scroll"><table><tr><th>เลขที่</th><th>วันที่</th><th class="num">บิล</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>
-      ${history.map((r) => `<tr><td class="mono">${esc(r.no)}</td><td>${thDate(r.date)}</td><td class="num">${r.rows ? r.rows.length : ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num">${money(r.total)}</td><td>${r.rows ? `<button class="btn small" data-rp="${esc(r.no)}">พิมพ์</button>` : '<span class="muted" style="font-size:13px">จากโปรแกรมเก่า</span>'}</td></tr>`).join('')}</table></div>` : '<div class="empty">ยังไม่มี</div>'}
+    <div id="hist"><div class="row muted"><span class="spinner"></span> กำลังโหลด…</div></div>
   </section>`;
-  $$('[data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(data.receipts.find((r) => r.no === b.dataset.rp))));
+
+  backend.findReceipts(shopId, code).then((list) => {
+    const seen = new Map([...data.receipts.filter((r) => r.customerCode === code), ...list].map((r) => [r.no, r]));
+    const history = [...seen.values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.no < b.no ? 1 : -1)).slice(0, 20);
+    if (!$('#hist')) return;
+    $('#hist').innerHTML = history.length ? `<div class="scroll"><table><tr><th>เลขที่</th><th>วันที่</th><th class="num">บิล</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>
+      ${history.map((r) => `<tr><td class="mono">${esc(r.no)}</td><td>${thDate(r.date)}</td><td class="num">${r.rows ? r.rows.length : ''}</td><td class="num">${r.rows ? money(r.totalPrincipal) : ''}</td><td class="num">${r.rows ? money(r.totalInterest) : ''}</td><td class="num">${money(r.total)}</td><td>${r.rows ? `<button class="btn small" data-rp="${esc(r.no)}">พิมพ์</button>` : '<span class="muted" style="font-size:13px">จากโปรแกรมเก่า</span>'}</td></tr>`).join('')}</table></div>` : '<div class="empty">ยังไม่มี</div>';
+    $$('[data-rp]').forEach((b) => b.addEventListener('click', () => printReceipt(seen.get(b.dataset.rp))));
+  }).catch((e) => { if ($('#hist')) $('#hist').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
   if (!d) return;
 
   $('#bt').innerHTML = `<tr><th></th><th>เลขที่บิล</th><th>วันที่</th><th class="num">ดอก %</th><th class="num">วัน</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th></tr>`
@@ -362,11 +475,10 @@ function viewDebtor(code) {
     if (mode !== 'bills' && selected.size) $('[data-m="bills"]').click(); else preview();
   });
   $('#pay').addEventListener('click', async () => {
+    const btn = $('#pay'); btn.disabled = true;
     let r;
-    try {
-      r = receivePayment(data, settings, { customerCode: code, date: asOf, mode, amount: $('#amt').value, billNos: [...selected] });
-      await persist();
-    } catch (e) { $('#payErr').textContent = e.message; $('#payErr').classList.remove('hidden'); return; }
+    try { r = await backend.commitPayment(shopId, settings, { customerCode: code, date: asOf, mode, amount: $('#amt').value, billNos: [...selected], by: user.name }); }
+    catch (e) { $('#payErr').textContent = e.message; $('#payErr').classList.remove('hidden'); btn.disabled = false; return; }
     viewDebtor(code);
     openDialog(`<h2>รับชำระแล้ว</h2>
       <div>ใบเสร็จ <b class="mono">${esc(r.no)}</b></div>
@@ -382,7 +494,7 @@ function showBill(b) {
   const st = b.status === 'cancelled' ? '<span class="pill cancel">ยกเลิก</span>' : b.type === 'credit' ? (b.status === 'open' ? '<span class="pill credit">ค้างชำระ</span>' : '<span class="pill cash">ชำระแล้ว</span>') : '<span class="pill cash">เงินสด</span>';
   openDialog(`<h2 class="mono">${esc(b.no)}</h2>
     <div>${thDate(b.date)} · ${b.type === 'credit' ? 'เงินเชื่อ ' + b.rate + '%' : 'เงินสด'} ${st}${b.graceDays ? ` · ปลอดดอก ${b.graceDays / 30} เดือน` : ''}</div>
-    <div>${esc(custLabel(b.customerCode))}</div>
+    <div>${esc(custLabel(b.customerCode))}${b.by ? ` <span class="muted">· ผู้ขาย ${esc(b.by)}</span>` : ''}</div>
     <div class="scroll"><table><tr><th>รายการ</th><th class="num">จำนวน</th><th class="num">ราคา</th><th class="num">รวม</th></tr>
     ${b.lines.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="num">${money(l.price)}</td><td class="num">${money(l.amount)}</td></tr>`).join('')}</table></div>
     ${b.discount ? `<div class="total-box"><span>ส่วนลด</span><span class="mono">${money(b.discount)}</span></div>` : ''}
@@ -399,21 +511,41 @@ function viewBills() {
       <select id="bf"><option value="">ทุกบิล</option><option value="open">ค้างชำระ</option><option value="credit">เงินเชื่อ</option><option value="cash">เงินสด</option><option value="cancelled">ยกเลิก</option></select>
     </div>
     <div class="scroll"><table id="blt"></table></div>
-    <div class="muted" id="bcount" style="font-size:14px"></div>
+    <div class="row" style="justify-content:space-between"><span class="muted" id="bcount" style="font-size:14px"></span>
+      ${backend.mode === 'cloud' ? '<button class="btn small" id="older">ค้นหาในบิลเก่าทั้งหมด</button>' : ''}</div>
   </section>`;
   const cm = custBy();
-  const sorted = [...data.bills].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.no < b.no ? 1 : -1));
+  let extra = new Map();
+  const all = () => [...new Map([...data.bills.map((b) => [b.no, b]), ...extra]).values()].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : a.no < b.no ? 1 : -1));
   const draw = () => {
     const q = $('#bq').value.trim(), n = norm(q), f = $('#bf').value;
-    const list = sorted.filter((b) => (!f || (f === 'open' ? b.status === 'open' : f === 'cancelled' ? b.status === 'cancelled' : b.type === f))
+    const list = all().filter((b) => (!f || (f === 'open' ? b.status === 'open' : f === 'cancelled' ? b.status === 'cancelled' : b.type === f))
       && (!n || norm(b.no).includes(n) || norm(cm.get(b.customerCode)?.name).includes(n)));
     $('#blt').innerHTML = `<tr><th>เลขที่</th><th>วันที่</th><th>ลูกค้า</th><th>ประเภท</th><th class="num">ยอด</th></tr>`
       + (list.length ? list.slice(0, 200).map((b) => `<tr class="clickable" data-no="${esc(b.no)}" tabindex="0"><td class="mono">${esc(b.no)}</td><td>${thDate(b.date)}</td><td>${esc(custLabel(b.customerCode, cm))}</td><td>${b.status === 'cancelled' ? '<span class="pill cancel">ยกเลิก</span>' : b.type === 'credit' ? `<span class="pill credit">เชื่อ${b.status === 'open' ? ' · ค้าง' : ''}</span>` : '<span class="pill cash">สด</span>'}</td><td class="num">${money(b.total)}</td></tr>`).join('')
         : '<tr><td colspan="5" class="empty">ไม่พบบิล</td></tr>');
-    $('#bcount').textContent = list.length > 200 ? `แสดง 200 จาก ${list.length.toLocaleString()} บิล พิมพ์ค้นหาให้แคบลง` : `${list.length.toLocaleString()} บิล`;
+    $('#bcount').textContent = (list.length > 200 ? `แสดง 200 จาก ${list.length.toLocaleString()} บิล พิมพ์ค้นหาให้แคบลง` : `${list.length.toLocaleString()} บิล`)
+      + (backend.mode === 'cloud' ? ' · ในเครื่องมีบิลค้างทั้งหมด + บิลย้อนหลัง 35 วัน' : '');
   };
   $('#bq').addEventListener('input', draw); $('#bf').addEventListener('change', draw);
-  const open = (e) => { const tr = e.target.closest('[data-no]'); if (tr) showBill(data.bills.find((b) => b.no === tr.dataset.no)); };
+  $('#older')?.addEventListener('click', async () => {
+    const q = $('#bq').value.trim();
+    if (!q) { toast('พิมพ์เลขที่บิล หรือชื่อลูกค้าก่อน'); return; }
+    const btn = $('#older'); btn.disabled = true;
+    try {
+      let found = [];
+      if (/\d{6,}/.test(q)) found = await backend.findBills(shopId, { no: q });
+      if (!found.length) {
+        const n = norm(q);
+        const custs = data.customers.filter((c) => norm(c.name).includes(n) || c.code === q).slice(0, 5);
+        for (const c of custs) found.push(...await backend.findBills(shopId, { customerCode: c.code }));
+      }
+      found.forEach((b) => extra.set(b.no, b));
+      toast(found.length ? `พบ ${found.length} บิล` : 'ไม่พบบิลเก่า');
+      draw();
+    } catch (e) { toast(e.message); } finally { btn.disabled = false; }
+  });
+  const open = (e) => { const tr = e.target.closest('[data-no]'); if (tr) showBill(all().find((b) => b.no === tr.dataset.no)); };
   $('#blt').addEventListener('click', open);
   $('#blt').addEventListener('keydown', (e) => { if (e.key === 'Enter') open(e); });
   draw(); $('#bq').focus();
@@ -434,13 +566,13 @@ function customerForm(c) {
     <div class="err hidden dlg-err"></div>
     <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
     const v = Object.fromEntries(new FormData(f));
-    v.code = v.code.trim(); v.name = v.name.trim(); v.zone = v.zone.trim();
-    if (!v.name) throw new Error('ใส่ชื่อลูกค้า');
-    if (isNew) {
-      if (data.customers.some((x) => x.code === v.code)) throw new Error('รหัสนี้มีแล้ว');
-      data.customers.push({ code: v.code, name: v.name, phone: v.phone.trim(), zone: v.zone, rate: 0 });
-    } else Object.assign(data.customers.find((x) => x.code === c.code), { name: v.name, phone: v.phone.trim(), zone: v.zone });
-    await persist(); toast('บันทึกลูกค้าแล้ว'); viewCustomers();
+    const rec = { code: v.code.trim(), name: v.name.trim(), phone: v.phone.trim(), zone: v.zone.trim() };
+    if (!rec.name) throw new Error('ใส่ชื่อลูกค้า');
+    if (!/^[^/]+$/.test(rec.code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
+    if (isNew && data.customers.some((x) => x.code === rec.code)) throw new Error('รหัสนี้มีแล้ว');
+    if (isNew) rec.rate = 0;
+    await backend.saveCustomer(shopId, rec);
+    toast('บันทึกลูกค้าแล้ว'); viewCustomers();
   });
 }
 function viewCustomers() {
@@ -475,20 +607,21 @@ function productForm(p) {
     <label class="field">ชื่อสินค้า<input type="text" name="name" value="${esc(p.name)}" required></label>
     <div class="form-grid">
       <label class="field">ราคาขาย (บาท)<input type="number" name="price" min="0" step="0.01" value="${p.price || ''}"></label>
-      <label class="field" id="stockWrap">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
+      <label class="field">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
     </div>
     <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" name="noStock" ${p.noStock ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ไม่มีสต๊อก (งานบริการ เช่น ไถแปร โดรนพ่นยา)</label>
-    <div class="muted" style="font-size:13px">ราคาทุน: ต้องขอรหัสจากแอดมิน (จะเปิดใช้เมื่อระบบออนไลน์พร้อม)</div>
+    <div class="muted" style="font-size:13px">ราคาทุน: ต้องขอรหัสจากแอดมิน (เปิดใช้รอบถัดไป)</div>
     <div class="err hidden dlg-err"></div>
     <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
     const v = Object.fromEntries(new FormData(f));
     if (!v.name.trim()) throw new Error('ใส่ชื่อสินค้า');
-    const rec = { name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, noStock: !!v.noStock };
-    if (isNew) {
-      if (data.products.some((x) => x.code === v.code.trim())) throw new Error('รหัสนี้มีแล้ว');
-      data.products.push({ code: v.code.trim(), cost: 0, group: '', ...rec });
-    } else Object.assign(data.products.find((x) => x.code === p.code), rec, { priceFromHistory: false });
-    await persist(); toast('บันทึกสินค้าแล้ว'); viewProducts();
+    const code = v.code.trim();
+    if (!/^[^/]+$/.test(code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
+    if (isNew && data.products.some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
+    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, noStock: !!v.noStock, priceFromHistory: false };
+    if (isNew) Object.assign(rec, { cost: 0, group: '' });
+    await backend.saveProduct(shopId, rec);
+    toast('บันทึกสินค้าแล้ว'); viewProducts();
   });
 }
 function viewProducts() {
@@ -512,11 +645,167 @@ function viewProducts() {
   draw(); $('#pq2').focus();
 }
 
+// ---------------- staff codes ----------------
+async function viewUsers() {
+  view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลด…</div></div>';
+  let users;
+  try { users = await backend.listUsers(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const shopLabel = (id) => shops.find((s) => s.id === id)?.label || id;
+  const myShops = user.role === 'admin' ? shops : shops.filter((s) => user.shops.includes(s.id));
+  const roles = user.role === 'admin' ? ['staff', 'secretary', 'owner', 'admin'] : ['staff', 'secretary'];
+  view.innerHTML = `<section class="card">
+    <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2>${backend.mode === 'cloud' ? '<button class="btn primary" id="addu">+ เพิ่มรหัส</button>' : ''}</div>
+    <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ</th><th></th></tr>
+    ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
+      <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
+      <td>${u.active ? '<span class="pill cash">ใช้งาน</span>' : '<span class="pill cancel">ปิด</span>'}</td>
+      <td>${u.uid !== user.uid && (user.role === 'admin' || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}</td></tr>`).join('')}
+    </table></div>
+    <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
+  </section>
+  ${backend.mode === 'cloud' ? `<section class="card" style="max-width:480px">
+    <h2>เปลี่ยน PIN ของฉัน</h2>
+    <form id="pinf" style="display:flex;flex-direction:column;gap:10px">
+      <label class="field">PIN เดิม<input type="password" name="old" inputmode="numeric" maxlength="6" required></label>
+      <label class="field">PIN ใหม่ 6 หลัก<input type="password" name="pin" inputmode="numeric" maxlength="6" required></label>
+      <div class="err hidden" id="pinerr"></div>
+      <div class="row"><button class="btn">เปลี่ยน PIN</button></div>
+    </form></section>` : ''}`;
+  $$('[data-toggle]').forEach((b) => b.addEventListener('click', async () => {
+    const on = b.dataset.active !== '1';
+    if (!confirm(on ? 'เปิดใช้รหัสนี้?' : 'ปิดรหัสนี้? คนที่ใช้รหัสนี้จะเข้าระบบไม่ได้')) return;
+    try { await backend.setUserActive(b.dataset.toggle, on); viewUsers(); } catch (e) { toast(e.message); }
+  }));
+  $('#addu')?.addEventListener('click', () => openDialog(`<h2>เพิ่มรหัสเข้าระบบ</h2>
+    <div class="form-grid">
+      <label class="field">รหัส (อังกฤษ/ตัวเลข)<input type="text" name="code" required autocomplete="off" style="font-family:var(--mono)"></label>
+      <label class="field">PIN 6 หลัก<input type="text" name="pin" inputmode="numeric" maxlength="6" required autocomplete="off" style="font-family:var(--mono)"></label>
+    </div>
+    <label class="field">ชื่อ<input type="text" name="name" required></label>
+    <label class="field">หน้าที่<select name="role">${roles.map((r) => `<option value="${r}">${ROLE[r]}</option>`).join('')}</select></label>
+    <fieldset style="border:1px solid var(--line);border-radius:10px;padding:10px 12px"><legend style="font-size:14px;font-weight:600">ร้าน</legend>
+      ${myShops.map((s) => `<label class="row" style="min-height:40px"><input type="checkbox" name="shops" value="${esc(s.id)}" ${s.id === shopId ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(s.label || s.name || s.id)}</label>`).join('')}
+    </fieldset>
+    <div class="err hidden dlg-err"></div>
+    <div class="row"><button class="btn primary" value="save">สร้างรหัส</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+    const fd = new FormData(f);
+    await backend.createUser({ code: fd.get('code'), name: fd.get('name'), pin: fd.get('pin'), role: fd.get('role'), shops: fd.getAll('shops') });
+    toast('สร้างรหัสแล้ว'); viewUsers();
+  }));
+  $('#pinf')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try { await backend.changeMyPin(f.old.value, f.pin.value); f.reset(); toast('เปลี่ยน PIN แล้ว'); }
+    catch (ex) { $('#pinerr').textContent = ex.message; $('#pinerr').classList.remove('hidden'); }
+  });
+}
+
+// ---------------- import from the old program ----------------
+const MAIN_DB_NAME = /^chemi2003new\.mdb$/i;
+function runImport(bytes, opts) {
+  return new Promise((resolve, reject) => {
+    let w;
+    try { w = new Worker('./js/import-worker.js', { type: 'module' }); }
+    catch { import('./importer.bundle.js').then((m) => resolve(m.importDatabase(bytes, opts))).catch(reject); return; }
+    w.onmessage = (e) => { w.terminate(); e.data.ok ? resolve(e.data.result) : reject(new Error(e.data.error)); };
+    w.onerror = (e) => { w.terminate(); reject(new Error(e.message || 'worker error')); };
+    w.postMessage({ bytes, opts });
+  });
+}
+async function viewImport() {
+  const info = await backend.shopInfo(shopId).catch(() => ({}));
+  view.innerHTML = `
+  <div class="note">ก่อนเริ่ม: <b>ปิดโปรแกรมเก่า</b>ก่อน ไม่งั้นข้อมูลล่าสุดอาจยังไม่ถูกบันทึกลงไฟล์ · ระบบอ่านไฟล์อย่างเดียว ไม่แก้ไฟล์เดิม</div>
+  <section class="card"><div class="step"><span class="n">1</span><div style="flex:1;display:flex;flex-direction:column;gap:10px">
+    <h2>เลือกโฟลเดอร์โปรแกรมเก่า</h2>
+    <div class="muted" style="font-size:14px">เลือกโฟลเดอร์ <span class="mono">ChemiNew</span> ระบบจะหาไฟล์ <span class="mono">Chemi2003NEW.MDB</span> ให้เอง</div>
+    <div class="row">
+      <label class="btn primary" for="pickFolder">เลือกโฟลเดอร์…</label><input id="pickFolder" type="file" webkitdirectory directory multiple class="hidden">
+      <label class="btn" for="pickFile">หรือเลือกไฟล์ .MDB โดยตรง</label><input id="pickFile" type="file" accept=".mdb,.MDB" class="hidden">
+    </div>
+    <div id="fileInfo" class="hidden"></div>
+  </div></div></section>
+  <section class="card"><div class="step off" id="s2"><span class="n">2</span><div style="flex:1;display:flex;flex-direction:column;gap:12px">
+    <h2>เลือกช่วงปีที่ต้องการนำเข้า</h2>
+    <div class="row"><label class="field">ตั้งแต่ปี <select id="fromYear"></select></label><label class="field">ถึงปี <select id="toYear"></select></label></div>
+    <div class="years" id="yearList"></div>
+    <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" id="keepOpen" checked style="width:22px;height:22px;accent-color:var(--green)"> นำบิลเงินเชื่อที่ยังค้างชำระมาด้วยทุกปี (แนะนำ)</label>
+    <div class="muted" style="font-size:14px">ลูกค้า สินค้า และสต๊อกล่าสุด นำเข้าทั้งหมดเสมอ · ช่วงปีมีผลกับประวัติบิลและใบเสร็จ</div>
+    <div class="row"><button class="btn primary" id="btnPreview">ดูสรุปก่อนนำเข้า</button></div>
+  </div></div></section>
+  <section class="card hidden" id="s3"><div class="step"><span class="n">3</span><div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0">
+    <h2>สรุปข้อมูลที่จะนำเข้า → ${esc(settings.label || settings.name || shopId)}</h2>
+    <div class="stats" id="stats"></div><div id="warnings"></div>
+    <h3 style="margin:6px 0 0;font-size:16px">ลูกค้าที่ค้างชำระมากสุด (เทียบกับโปรแกรมเก่าได้)</h3>
+    <div class="scroll"><table id="topDebt"></table></div>
+    <div class="note">${info.importedAt ? `ร้านนี้เคยนำเข้าแล้วเมื่อ ${new Date(info.importedAt).toLocaleString('th-TH')} · ` : ''}การนำเข้าจะ<b>ลบข้อมูลลูกค้า สินค้า บิล และใบเสร็จเดิมของร้านนี้ทั้งหมด</b>แล้วใส่ข้อมูลจากไฟล์แทน (การตั้งค่าร้านและรหัสพนักงานยังอยู่)</div>
+    <div class="row"><button class="btn warn" id="btnImport">นำเข้าข้อมูล</button><span id="importState" class="muted"></span></div>
+  </div></div></section>
+  <div id="msg"></div>`;
+  let bytes = null, result = null;
+  const message = (html, cls = 'err') => { $('#msg').innerHTML = html ? `<div class="${cls}">${html}</div>` : ''; };
+  const loadFile = async (file, all) => {
+    message('');
+    const lock = all?.find((f) => /\.ldb$/i.test(f.name));
+    bytes = new Uint8Array(await file.arrayBuffer());
+    let meta;
+    try { const m = await import('./importer.bundle.js'); meta = m.inspect(bytes); } catch (e) { bytes = null; message(esc(e.message)); return; }
+    $('#fileInfo').className = 'ok';
+    $('#fileInfo').innerHTML = `พบไฟล์ <span class="mono">${esc(file.webkitRelativePath || file.name)}</span> · แก้ไขล่าสุด ${new Date(file.lastModified).toLocaleString('th-TH')}<br>ลูกค้า ${meta.customers} · สินค้า ${meta.products}`
+      + (lock ? '<div class="note" style="margin-top:8px">พบไฟล์ล็อก (.ldb) แปลว่าโปรแกรมเก่าอาจยังเปิดอยู่ ปิดโปรแกรมแล้วเลือกใหม่จะได้ข้อมูลล่าสุด</div>' : '');
+    const years = Object.keys(meta.years).map(Number);
+    const opts = years.map((y) => `<option value="${y}">${y}</option>`).join('');
+    $('#fromYear').innerHTML = opts; $('#toYear').innerHTML = opts;
+    $('#fromYear').value = years[0]; $('#toYear').value = years[years.length - 1];
+    $('#yearList').innerHTML = years.map((y) => `<span class="stat" style="padding:6px 10px"><span class="k">ปี ${y}</span> <b class="mono">${meta.years[y].toLocaleString()}</b> <span class="k">บิล</span></span>`).join('');
+    $('#s2').classList.remove('off'); $('#s3').classList.add('hidden');
+  };
+  $('#pickFolder').addEventListener('change', (e) => {
+    const files = [...e.target.files];
+    const main = files.find((f) => MAIN_DB_NAME.test(f.name) && !/datae?mt|copy|report/i.test(f.webkitRelativePath)) || files.find((f) => MAIN_DB_NAME.test(f.name));
+    if (!main) { message('ไม่พบไฟล์ Chemi2003NEW.MDB ในโฟลเดอร์ที่เลือก ลองเลือกโฟลเดอร์ ChemiNew หรือ ChemiNew\\Data'); return; }
+    loadFile(main, files);
+  });
+  $('#pickFile').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+  $('#btnPreview').addEventListener('click', async () => {
+    const fromYear = +$('#fromYear').value, toYear = +$('#toYear').value;
+    if (fromYear > toYear) { message('ปีเริ่มต้องไม่มากกว่าปีสิ้นสุด'); return; }
+    const btn = $('#btnPreview'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> กำลังอ่านไฟล์… (ประมาณ 10–30 วินาที)';
+    try { result = await runImport(bytes, { fromYear, toYear, keepOpenBills: $('#keepOpen').checked }); }
+    catch (e) { message('อ่านไฟล์ไม่สำเร็จ: ' + esc(e.message)); return; }
+    finally { btn.disabled = false; btn.textContent = 'ดูสรุปก่อนนำเข้า'; }
+    const s = result.summary;
+    const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+    $('#stats').innerHTML = stat('ลูกค้า', s.customers) + stat('สินค้า', s.products) + stat('บิลขาย', s.bills.toLocaleString()) + stat('บิลค้างชำระ', s.openBills)
+      + stat('เงินต้นค้างรวม', '฿' + money(s.openPrincipal)) + stat('ลูกค้าที่ค้าง', s.openCustomers) + stat('ใบเสร็จรับชำระ', s.receipts) + stat('สต๊อก ณ งวด', s.stockPeriod);
+    $('#warnings').innerHTML = s.warnings.map((w) => `<div class="note">${esc(w)}</div>`).join('');
+    const names = new Map(result.customers.map((c) => [c.code, c]));
+    const by = new Map();
+    for (const b of result.bills) if (b.status === 'open') { const x = by.get(b.customerCode) || { n: 0, sum: 0 }; x.n++; x.sum += b.total; by.set(b.customerCode, x); }
+    const top = [...by.entries()].sort((a, b) => b[1].sum - a[1].sum).slice(0, 10);
+    $('#topDebt').innerHTML = '<tr><th>รหัส</th><th>ลูกค้า</th><th>หมู่บ้าน</th><th class="num">บิล</th><th class="num">เงินต้นค้าง</th></tr>'
+      + top.map(([code, x]) => `<tr><td class="mono">${esc(code)}</td><td>${esc(names.get(code)?.name || '?')}</td><td>${esc(names.get(code)?.zone || '')}</td><td class="num">${x.n}</td><td class="num">${money(x.sum)}</td></tr>`).join('');
+    $('#s3').classList.remove('hidden'); $('#s3').scrollIntoView({ behavior: 'smooth' });
+  });
+  $('#btnImport').addEventListener('click', async () => {
+    if (!result || !confirm(`ยืนยันนำเข้าเป็นข้อมูลของ "${settings.label || settings.name || shopId}"?\nข้อมูลเดิมของร้านนี้จะถูกแทนที่ทั้งหมด`)) return;
+    const btn = $('#btnImport'); btn.disabled = true;
+    try {
+      await backend.replaceShopData(shopId, result, (p) => { $('#importState').textContent = `กำลังบันทึก… ${Math.round(p * 100)}%`; });
+      $('#importState').textContent = '';
+      message(`นำเข้าเรียบร้อย · ลูกค้า ${result.summary.customers} · สินค้า ${result.summary.products} · บิล ${result.summary.bills.toLocaleString()} · ค้าง ฿${money(result.summary.openPrincipal)}`, 'ok');
+      if (backend.mode === 'local') { shop = await backend.openShop(shopId, onRemoteChange); data = shop.data; }
+    } catch (e) { message('บันทึกไม่สำเร็จ: ' + esc(e.message)); }
+    finally { btn.disabled = false; }
+  });
+}
+
 // ---------------- settings ----------------
 function viewSettings() {
   view.innerHTML = `<section class="card">
     <h2>ตั้งค่าร้าน</h2>
     <form id="sf" style="display:flex;flex-direction:column;gap:12px">
+      <label class="field">ชื่อเรียกร้าน (ใช้ในระบบ เช่น ร้านปุ๋ย)<input type="text" name="label" value="${esc(settings.label)}"></label>
       <label class="field">ชื่อร้าน (หัวบิล)<input type="text" name="name" value="${esc(settings.name)}" required></label>
       <label class="field">ที่อยู่<textarea name="address">${esc(settings.address)}</textarea></label>
       <div class="form-grid">
@@ -533,32 +822,24 @@ function viewSettings() {
     </form>
   </section>
   <section class="card">
-    <h2>ข้อมูลในเครื่องนี้</h2>
+    <h2>ข้อมูลร้านนี้</h2>
     <div class="stats">
       <div class="stat"><div class="k">ลูกค้า</div><div class="v">${data.customers.length}</div></div>
       <div class="stat"><div class="k">สินค้า</div><div class="v">${data.products.length}</div></div>
-      <div class="stat"><div class="k">บิล</div><div class="v">${data.bills.length.toLocaleString()}</div></div>
-      <div class="stat"><div class="k">ใบเสร็จ</div><div class="v">${data.receipts.length.toLocaleString()}</div></div>
+      <div class="stat"><div class="k">บิลค้าง</div><div class="v">${data.bills.filter((b) => b.status === 'open').length}</div></div>
     </div>
-    <div class="row"><a class="btn" href="import.html">นำเข้าข้อมูลจากโปรแกรมเก่า</a></div>
-    <div class="note">ฉบับทดลอง: ข้อมูลเก็บในเบราว์เซอร์ของเครื่องนี้ ยังไม่ขึ้นระบบออนไลน์</div>
+    ${backend.mode === 'local' ? '<div class="note">โหมดทดสอบ: ข้อมูลเก็บในเบราว์เซอร์ของเครื่องนี้เท่านั้น</div>' : ''}
   </section>`;
   const f = $('#sf');
-  const ex = () => { $('#pfx').textContent = (f.prefix.value.trim() ? f.prefix.value.trim() + '-' : '') + 'BS' + String(new Date().getFullYear() + 543).slice(2) + todayIso().slice(5, 7) + todayIso().slice(8) + '0001'; };
+  const ex = () => { const t = todayIso(); $('#pfx').textContent = (f.prefix.value.trim() ? f.prefix.value.trim() + '-' : '') + 'BS' + String(+t.slice(0, 4) + 543).slice(2) + t.slice(5, 7) + t.slice(8) + '0001'; };
   f.prefix.addEventListener('input', ex); ex();
   f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = Object.fromEntries(new FormData(f));
-    settings = { ...settings, name: v.name.trim(), address: v.address.trim(), phone: v.phone.trim(), taxId: v.taxId.trim(), prefix: v.prefix.trim(), defaultRate: Number(v.defaultRate), defaultGraceMonths: Number(v.defaultGraceMonths) };
-    await saveSettings(settings);
-    cart.rate = null; toast('บันทึกการตั้งค่าแล้ว'); render();
+    const next = { ...settings, label: v.label.trim(), name: v.name.trim(), address: v.address.trim(), phone: v.phone.trim(), taxId: v.taxId.trim(), prefix: v.prefix.trim(), defaultRate: Number(v.defaultRate), defaultGraceMonths: Number(v.defaultGraceMonths) };
+    try { await backend.saveSettings(shopId, next); } catch (ex2) { toast(ex2.message); return; }
+    settings = next; resetCart(); toast('บันทึกการตั้งค่าแล้ว'); render();
   });
 }
 
-// ---------------- start ----------------
-(async () => {
-  [data, settings] = await Promise.all([getData(), getSettings(DEFAULT_SETTINGS)]);
-  data.receipts ||= [];
-  if (!settings.name && !location.hash) location.hash = 'settings';
-  render();
-})();
+start();

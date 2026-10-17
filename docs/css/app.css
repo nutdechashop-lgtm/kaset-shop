@@ -121,3 +121,6 @@ dialog h2 { margin: 0; font-size: 19px; }
 .stats { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 input.price.zero { border-color: var(--orange); background: var(--orange-soft); }
 td.mono, td .mono, td .btn.link { white-space: nowrap; }
+.who { font-size: 14px; color: var(--nav-muted); gap: 8px; }
+.btn.hdr { background: transparent; color: var(--nav-text); border-color: rgba(255,255,255,.3); }
+.topbar .pill { background: rgba(255,255,255,.12); color: var(--nav-text); }

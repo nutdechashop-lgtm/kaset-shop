@@ -1,0 +1,48 @@
+rules_version = '2';
+// Paste into Firebase console → Firestore Database → Rules → Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profilePath() { return /databases/$(database)/documents/users/$(request.auth.uid); }
+    function me() { return get(profilePath()).data; }
+    function active() { return signedIn() && exists(profilePath()) && me().active == true; }
+    function isAdmin() { return active() && me().role == 'admin'; }
+    function isOwner() { return active() && me().role == 'owner'; }
+    function member(shopId) { return active() && (me().role == 'admin' || shopId in me().shops); }
+    function manager(shopId) { return member(shopId) && me().role in ['admin', 'owner']; }
+
+    // First super-admin: can be claimed once, never changed.
+    match /config/main {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.adminUid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Login codes. PINs live in Firebase Auth, never here.
+    match /users/{uid} {
+      allow read: if active() || (signedIn() && uid == request.auth.uid);
+      allow create: if isAdmin()
+        || (uid == request.auth.uid && request.resource.data.role == 'admin'
+            && get(/databases/$(database)/documents/config/main).data.adminUid == request.auth.uid)
+        || (isOwner() && request.resource.data.role in ['staff', 'secretary']
+            && request.resource.data.shops.size() > 0
+            && request.resource.data.shops.hasOnly(me().shops));
+      allow update: if isAdmin()
+        || (isOwner() && resource.data.role in ['staff', 'secretary']
+            && resource.data.shops.hasAny(me().shops)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']));
+      allow delete: if isAdmin();
+    }
+
+    // Each shop's data is visible only to people of that shop (and the super-admin).
+    match /shops/{shopId} {
+      allow read: if member(shopId);
+      allow create, delete: if isAdmin();
+      allow update: if manager(shopId);
+      match /{coll}/{docId} {
+        allow read, create, update: if member(shopId);
+        allow delete: if manager(shopId);
+      }
+    }
+  }
+}
