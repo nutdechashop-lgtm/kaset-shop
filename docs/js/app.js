@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines } from './shop.js';
+import { bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -165,42 +165,70 @@ async function enterShop(id) {
 }
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
-// ---------------- printing ----------------
-function shopHead() {
-  return `<div><div class="shop">${esc(settings.name || '[ชื่อร้าน]')}</div><div>${esc(settings.address)}</div><div>${settings.phone ? 'โทร ' + esc(settings.phone) : ''}${settings.taxId ? ' · เลขผู้เสียภาษี ' + esc(settings.taxId) : ''}</div></div>`;
-}
+// ---------------- printing (same layout as the old program's bills: A5 landscape, A4 when long) ----------------
 function doPrint(html, a4) {
   const area = $('#printArea');
   area.className = a4 ? 'a4' : '';
   area.innerHTML = html;
-  setTimeout(() => window.print(), 50);
+  setTimeout(() => window.print(), 80);
+}
+const dt = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + 543} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const dd = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${+y + 543}`; };
+function paperHead(title, right) {
+  const addr = [settings.address, settings.phone ? 'โทร ' + settings.phone : ''].filter(Boolean).join(' · ');
+  return `<div class="p-head"><div><div class="p-shop">${esc(settings.name || '[ชื่อร้าน]')}</div><div>${esc(addr)}</div>${settings.taxId ? `<div>เลขประจำตัวผู้เสียภาษี ${esc(settings.taxId)}</div>` : ''}</div>
+    <div class="p-right"><div class="p-title">${title}</div>${right}</div></div>`;
+}
+function custBox(code, rightHtml) {
+  const c = custBy().get(code);
+  const left = c ? `<div><b>รหัสลูกค้า</b> (${esc(c.code)}) ${esc(c.name)}</div><div><b>ที่อยู่</b> ${esc(c.zone || '-')}${c.phone ? ` · <b>โทร</b> ${esc(c.phone)}` : ''}</div>`
+    : '<div><b>ลูกค้า</b> ลูกค้าทั่วไป</div>';
+  return `<div class="p-box"><div class="p-cell">${left}</div><div class="p-cell p-side">${rightHtml}</div></div>`;
 }
 function printBill(bill) {
-  const c = custBy().get(bill.customerCode);
-  const title = bill.type === 'credit' ? 'บิลเงินเชื่อ' : 'บิลเงินสด';
-  const html = `<div class="doc">
-    <div class="head">${shopHead()}<div class="title">${title}${bill.edits ? `<div style="font-size:10pt;font-weight:500">แก้ไขครั้งที่ ${bill.edits}</div>` : ''}<div style="font-size:11pt;font-weight:500">เลขที่ ${esc(bill.no)}<br>วันที่ ${thDate(bill.date)}</div></div></div>
-    <div style="margin-top:6px">ลูกค้า: <b>${esc(c ? c.name : 'ลูกค้าทั่วไป')}</b> ${c?.zone ? '(' + esc(c.zone) + ')' : ''} ${c?.code ? ' รหัส ' + esc(c.code) : ''}</div>
-    <table><tr><th style="width:8mm">#</th><th>รายการ</th><th class="num">จำนวน</th><th>หน่วย</th><th class="num">ราคา</th><th class="num">จำนวนเงิน</th></tr>
-    ${bill.lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.name)}</td><td class="num">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="num">${money(l.price)}</td><td class="num">${money(l.amount)}</td></tr>`).join('')}
-    </table>
-    <div class="sum"><div class="remark">หมายเหตุ :</div>
-      <div class="totals"><div><span>รวม</span><span>${money(bill.subtotal)}</span></div>${bill.discount ? `<div><span>ส่วนลด</span><span>${money(bill.discount)}</span></div>` : ''}<div class="net"><span>รวมสุทธิ</span><span>${money(bill.total)}</span></div></div></div>
-    <div class="sign"><div>ผู้รับสินค้า</div><div>ผู้ขาย ${esc(bill.by || '')}</div></div></div>`;
-  doPrint(html, bill.lines.length > 12);
+  const qtyTotal = round2(bill.lines.reduce((s, l) => s + l.qty, 0));
+  const lastEdit = bill.editHistory?.at(-1);
+  const html = `<div class="paper">
+    ${paperHead('ใบส่งสินค้า / ใบแจ้งหนี้',
+      `${bill.edits ? `<div class="p-edit">แก้ไขครั้งที่ ${bill.edits}${lastEdit?.at ? ' · ' + dt(lastEdit.at).slice(0, 16) : ''}</div>` : ''}
+       <div>${bill.edits ? 'วันที่ออกบิล' : 'วันที่'} ${bill.createdAt ? dt(bill.createdAt) : dd(bill.date)}</div>`)}
+    ${custBox(bill.customerCode, `<div class="p-split"><span><b>เลขที่</b> ${esc(bill.no)}</span><b>${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'}</b></div>
+       <div><b>พนักงานขาย</b> ${esc(bill.by || '-')}</div>`)}
+    <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>รายการ</th><th style="width:22mm">จำนวน</th><th class="r" style="width:20mm">ราคา</th><th class="r" style="width:16mm">ส่วนลด</th><th class="r" style="width:24mm">จำนวนเงิน</th></tr></thead>
+    <tbody>${bill.lines.map((l, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(l.name)}</td><td>${qtyFmt(l.qty)} ${esc(l.unit)}</td><td class="r">${money(l.price)}</td><td class="r"></td><td class="r">${money(l.amount)}</td></tr>`).join('')}</tbody></table>
+    <div class="p-box p-sum">
+      <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(bill.total)})</div></div>
+      <div class="p-cell p-count"><div>รวมสินค้า</div><b>${qtyFmt(qtyTotal)}</b></div>
+      <div class="p-cell p-totals"><div class="p-split"><span>จำนวนเงิน</span><span>${money(bill.subtotal)}</span></div>
+        ${bill.discount ? `<div class="p-split"><span>หัก ส่วนลด</span><span>${money(bill.discount)}</span></div>` : ''}
+        <div class="p-split p-grand"><span>รวมทั้งสิ้น</span><span>${money(bill.total)}</span></div></div>
+    </div>
+    <div class="p-sign four"><div>ผู้รับสินค้า</div><div>ผู้ส่งสินค้า</div><div>ผู้อนุมัติ</div><div>ผู้ออกบิล</div></div>
+  </div>`;
+  doPrint(html, bill.lines.length > 8);
 }
 function printReceipt(r) {
-  const c = custBy().get(r.customerCode);
-  const html = `<div class="doc">
-    <div class="head">${shopHead()}<div class="title">ใบเสร็จรับเงิน<div style="font-size:11pt;font-weight:500">เลขที่ ${esc(r.no)}<br>วันที่ ${thDate(r.date)}</div></div></div>
-    <div style="margin-top:6px">ได้รับเงินจาก: <b>${esc(c ? c.name : r.customerCode)}</b> ${c?.zone ? '(' + esc(c.zone) + ')' : ''} รหัส ${esc(r.customerCode)}</div>
-    <table><tr><th>#</th><th>เลขที่บิล</th><th>วันที่บิล</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th></tr>
-    ${r.rows.map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.no)}</td><td>${thDate(x.date)}</td><td class="num">${money(x.principal)}</td><td class="num">${money(x.interest)}</td><td class="num">${money(x.total)}</td></tr>`).join('')}
-    </table>
-    <div class="sum"><div class="remark">หมายเหตุ :</div>
-      <div class="totals"><div><span>เงินต้น</span><span>${money(r.totalPrincipal)}</span></div><div><span>ดอกเบี้ย</span><span>${money(r.totalInterest)}</span></div><div class="net"><span>รวมรับชำระ</span><span>${money(r.total)}</span></div></div></div>
-    <div class="sign"><div>ผู้ชำระเงิน</div><div>ผู้รับเงิน ${esc(r.by || '')}</div></div></div>`;
-  doPrint(html, r.rows.length > 12);
+  // Receipts made before the program stored the owed amounts fall back to the paid amounts.
+  const rows = r.owed || r.rows;
+  const sum = (k) => round2(rows.reduce((s, x) => s + (x[k] || 0), 0));
+  const owedTotal = r.owedTotal ?? sum('total');
+  const html = `<div class="paper">
+    ${paperHead('ใบเสร็จรับเงิน', `<div>วันที่ ${r.createdAt ? dt(r.createdAt) : dd(r.date)}</div>`)}
+    ${custBox(r.customerCode, `<div><b>เลขที่</b> ${esc(r.no)}</div><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(r.date)}</div><div><b>รับเงินโดย</b> ${esc(r.by || '-')}</div>`)}
+    <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>บิลอ้างอิง</th><th style="width:28mm">วันที่บิล</th><th class="r" style="width:26mm">เงินต้น</th><th class="r" style="width:24mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>
+    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>`).join('')}
+      <tr class="p-foot"><td colspan="3" class="r">${r.owed ? 'รวมยอดค้าง' : 'รวม'}</td><td class="r">${money(sum('principal'))}</td><td class="r">${money(sum('interest'))}</td><td class="r">${money(owedTotal)}</td></tr></tbody></table>
+    <div class="p-box p-sum">
+      <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(r.total)})</div></div>
+      <div class="p-cell p-totals" style="width:62mm">
+        ${r.owed ? `<div class="p-split"><span>ยอดค้างรวม</span><span>${money(owedTotal)}</span></div>` : ''}
+        <div class="p-split p-grand"><span>รับชำระครั้งนี้</span><span>${money(r.total)}</span></div>
+        ${r.owed ? `<div class="p-split p-rest"><span>ยอดคงค้าง</span><span>${money(r.remaining)}</span></div>` : ''}
+      </div>
+    </div>
+    <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>
+  </div>`;
+  doPrint(html, rows.length > 8);
 }
 
 function openDialog(html, onSubmit) {

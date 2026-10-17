@@ -139,14 +139,20 @@ export function receivePayment(data, settings, input, opts = {}) {
     const row = rows.find((r) => r.no === u.no);
     data.bills[i] = { ...u, interestPaid: round2((data.bills[i].interestPaid || 0) + row.payInterest), receiptNo: u.status === 'paid' ? no : data.bills[i].receiptNo };
   }
+  // What the customer owed on every open bill at the moment of payment (printed on the receipt).
+  const owed = open.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.no < b.no ? -1 : 1))
+    .map((b) => { const bal = billBalance(b, date); return { no: b.no, date: b.date, principal: bal.principal, interest: bal.interest, total: bal.total }; });
+  const owedTotal = round2(owed.reduce((s, x) => s + x.total, 0));
   const receipt = {
     no, date, customerCode: input.customerCode, mode: input.mode === 'bills' ? 'bills' : 'amount',
+    owed, owedTotal,
     rows: rows.map((r) => ({ no: r.no, date: r.date, principal: r.payPrincipal, interest: r.payInterest, total: round2(r.payPrincipal + r.payInterest), principalLeft: r.principalLeft })),
     totalPrincipal: res.totalPrincipal, totalInterest: res.totalInterest,
     total: round2(res.totalPrincipal + res.totalInterest),
     received: input.mode === 'bills' ? round2(res.totalPrincipal + res.totalInterest) : round2(Number(input.amount)),
     change: res.change, by: input.by || '', createdAt: new Date().toISOString(),
   };
+  receipt.remaining = round2(owedTotal - receipt.total);
   data.receipts.push(receipt);
   return receipt;
 }
@@ -232,4 +238,31 @@ export function diffLines(oldLines, newLines) {
   }
   for (const [code, l] of o) if (!n.has(code)) out.push({ kind: 'remove', name: l.name, qty: l.qty });
   return out;
+}
+
+// Amount in Thai words, as printed on bills: 4280 → "สี่พันสองร้อยแปดสิบบาทถ้วน"
+export function bahtText(amount) {
+  const n = Math.round((Number(amount) || 0) * 100);
+  if (n === 0) return 'ศูนย์บาทถ้วน';
+  const digit = ['', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+  const unit = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+  const group = (num) => { // 0..999999
+    const s = String(num); let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const d = +s[i], pos = s.length - i - 1;
+      if (!d) continue;
+      if (pos === 1 && d === 1) out += 'สิบ';
+      else if (pos === 1 && d === 2) out += 'ยี่สิบ';
+      else if (pos === 0 && d === 1 && s.length > 1) out += 'เอ็ด';
+      else out += digit[d] + unit[pos];
+    }
+    return out;
+  };
+  const words = (num) => { // any size, millions repeat
+    if (num < 1000000) return group(num);
+    return words(Math.floor(num / 1000000)) + 'ล้าน' + group(num % 1000000);
+  };
+  const neg = n < 0 ? 'ลบ' : '';
+  const abs = Math.abs(n), baht = Math.floor(abs / 100), satang = abs % 100;
+  return neg + (baht ? words(baht) + 'บาท' : '') + (satang ? words(satang) + 'สตางค์' : 'ถ้วน');
 }

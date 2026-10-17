@@ -93,28 +93,44 @@ dialog h2 { margin: 0; font-size: 19px; }
 
 /* ---------- printing (bills A5 landscape, A4 when long) ---------- */
 #printArea { display: none; }
-@page { size: A5 landscape; margin: 8mm; }
-@page a4 { size: A4 portrait; margin: 12mm; }
+@page { size: A5 landscape; margin: 7mm 8mm; }
+@page a4 { size: A4 portrait; margin: 10mm; }
 @media print {
   body > *:not(#printArea) { display: none !important; }
-  body { background: #fff; }
-  #printArea { display: block; color: #000; background: #fff; font-size: 12pt; }
+  html, body { background: #fff !important; }
+  #printArea { display: block; }
   #printArea.a4 { page: a4; }
 }
-.doc { font-family: 'IBM Plex Sans Thai', sans-serif; color: #000; }
-.doc .head { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1.5px solid #000; padding-bottom: 6px; }
-.doc .shop { font-size: 16pt; font-weight: 700; }
-.doc .title { font-size: 15pt; font-weight: 700; text-align: right; }
-.doc table { font-size: 11pt; margin-top: 6px; }
-.doc th { background: none; color: #000; border-bottom: 1px solid #000; font-weight: 600; font-size: 10.5pt; padding: 4px 6px; }
-.doc td { border-top: 1px solid #ccc; padding: 4px 6px; }
-.doc .sum { display: flex; justify-content: space-between; gap: 16px; margin-top: 8px; align-items: flex-start; }
-.doc .remark { flex: 1; border: 1px solid #000; min-height: 22mm; padding: 4px 8px; font-size: 10.5pt; }
-.doc .totals { min-width: 60mm; font-size: 11pt; }
-.doc .totals div { display: flex; justify-content: space-between; }
-.doc .totals .net { font-size: 14pt; font-weight: 700; border-top: 1px solid #000; margin-top: 2px; padding-top: 2px; }
-.doc .sign { display: flex; justify-content: space-around; margin-top: 12mm; font-size: 10.5pt; }
-.doc .sign div { border-top: 1px dotted #000; min-width: 45mm; text-align: center; padding-top: 2px; }
+.paper { font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif; font-size: 12px; line-height: 1.4; color: #000; background: #fff; display: flex; flex-direction: column; gap: 2.2mm; height: 133mm; }
+#printArea.a4 .paper { height: 276mm; }
+.paper b { font-weight: 700; }
+.p-head { display: flex; justify-content: space-between; gap: 4mm; }
+.p-shop { font-size: 17px; font-weight: 700; }
+.p-right { text-align: right; }
+.p-title { font-size: 15px; font-weight: 700; text-decoration: underline; }
+.p-edit { display: inline-block; border: 1.5px solid #000; padding: 0 2mm; margin: .5mm 0; font-weight: 700; }
+.p-box { display: flex; border: 1px solid #000; }
+.p-cell { padding: 1.5mm 2.6mm; }
+.p-box > .p-cell:first-child { flex: 1; }
+.p-side { width: 68mm; border-left: 1px solid #000; }
+.p-split { display: flex; justify-content: space-between; gap: 3mm; }
+.p-table { width: 100%; border-collapse: collapse; border: 1px solid #000; font-size: 12px; }
+.p-table th { background: none; color: #000; font-size: 12px; font-weight: 700; padding: 1mm 1.6mm; border: 1px solid #000; text-align: left; }
+.p-table td { padding: .8mm 1.6mm; border: 0; border-left: 1px solid #000; border-right: 1px solid #000; }
+.p-table .c { text-align: center; } .p-table .r { text-align: right; }
+.p-table th.c { text-align: center; } .p-table th.r { text-align: right; }
+.p-table tr.p-foot td { border-top: 1px solid #000; font-weight: 700; padding: 1.2mm 1.6mm; }
+.p-sum .p-notes { flex: 1; display: flex; flex-direction: column; }
+.p-remark { flex: 1; min-height: 10mm; padding: 1.3mm 2.6mm; border-bottom: 1px solid #000; font-weight: 600; }
+.p-words { padding: 1.3mm 2.6mm; text-align: center; font-weight: 600; }
+.p-count { width: 19mm; border-left: 1px solid #000; text-align: center; }
+.p-totals { width: 50mm; border-left: 1px solid #000; display: flex; flex-direction: column; gap: .3mm; }
+.p-grand { font-weight: 700; font-size: 14px; }
+.p-rest { font-weight: 600; border-top: 1px solid #000; margin-top: .6mm; padding-top: .6mm; }
+.p-sign { margin-top: auto; display: grid; text-align: center; }
+.p-sign.four { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4mm; }
+.p-sign.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20mm; padding: 0 16mm; }
+.p-sign div::before { content: ''; display: block; height: 7mm; border-bottom: 1px dotted #000; margin-bottom: .6mm; }
 .topbar .wrap > * { min-width: 0; max-width: 100%; }
 .nav { min-width: 0; max-width: 100%; scrollbar-width: none; }
 .seg { align-self: flex-start; }

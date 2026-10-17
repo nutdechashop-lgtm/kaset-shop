@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -84,4 +84,14 @@ assert.equal(cn.bill.status, 'cancelled'); assert.equal(cn.stock.get('000001'), 
 // A credit bill that already got a payment is locked
 assert.match(billLockReason(data.bills.find((x) => x.no === a.no)), /รับชำระ/);
 assert.throws(() => editBill(data.products, data.bills.find((x) => x.no === a.no), { lines: [] }), /รับชำระ/);
+assert.equal(bahtText(4280), 'สี่พันสองร้อยแปดสิบบาทถ้วน');
+assert.equal(bahtText(5000), 'ห้าพันบาทถ้วน');
+assert.equal(bahtText(21), 'ยี่สิบเอ็ดบาทถ้วน');
+assert.equal(bahtText(11), 'สิบเอ็ดบาทถ้วน');
+assert.equal(bahtText(101), 'หนึ่งร้อยเอ็ดบาทถ้วน');
+assert.equal(bahtText(1670876), 'หนึ่งล้านหกแสนเจ็ดหมื่นแปดร้อยเจ็ดสิบหกบาทถ้วน');
+assert.equal(bahtText(74243.96), 'เจ็ดหมื่นสี่พันสองร้อยสี่สิบสามบาทเก้าสิบหกสตางค์');
+assert.equal(bahtText(0.5), 'ห้าสิบสตางค์');
+// receipt keeps what was owed before paying
+assert.equal(r1.owedTotal, 7544.65); assert.equal(r1.remaining, 2544.65); assert.equal(r1.owed.length, 2);
 console.log('ALL SHOP CHECKS PASSED');
