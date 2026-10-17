@@ -375,6 +375,14 @@ export function bankList(data, asOf, opts = {}) {
   return { groups: list, people: list.reduce((s, g) => s + g.rows.length, 0), total: round2(list.reduce((s, g) => s + g.total, 0)) };
 }
 // One shop at a glance (home screen / admin overview).
+// ---------- low-stock alerts ----------
+// minStock = alert when stock drops below this (0 / empty = no alert). Service items never alert.
+export const MIN_PRESETS = [5, 10, 20, 30, 50];
+export const isLow = (p) => !!p && !p.deleted && !p.noStock && Number(p.minStock) > 0 && (Number(p.stock) || 0) < Number(p.minStock);
+export function lowStock(products) {
+  return (products || []).filter(isLow).sort((a, b) => (a.stock / a.minStock) - (b.stock / b.minStock) || a.name.localeCompare(b.name, 'th'));
+}
+
 export function shopSnapshot(data, asOf) {
   const debts = customerDebts(data, asOf);
   let principal = 0, interest = 0, bills = 0;
@@ -386,6 +394,7 @@ export function shopSnapshot(data, asOf) {
     pending: (data.requests || []).filter((r) => r.status === 'pending').length,
     negativeStock: (data.products || []).filter((p) => !p.deleted && !p.noStock && p.stock < 0).length,
     noPrice: (data.products || []).filter((p) => !p.deleted && !p.price).length,
+    lowStock: lowStock(data.products).length,
   };
 }
 

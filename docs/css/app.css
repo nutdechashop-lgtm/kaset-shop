@@ -197,3 +197,19 @@ tr.void-row td:not(:last-child) { color: var(--muted, #8a8f86); text-decoration:
 .change.ok { background: var(--green-soft); color: var(--green); }
 .change.short { background: var(--err-bg); color: var(--red); }
 .change.big b { font-size: 30px; }
+/* low-stock alerts */
+.bell { position: relative; display: inline-grid; place-items: center; width: 40px; height: 40px; margin-left: 6px; border-radius: 10px; color: inherit; vertical-align: middle; }
+.bell .badge { position: absolute; top: 0; right: -4px; margin: 0; }
+.min-tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 6px; background: var(--line-soft); color: var(--muted); white-space: nowrap; font-weight: 500; }
+.min-tag.low { background: var(--orange-soft); color: var(--orange-ink); font-weight: 700; }
+.stock-n.low, .low-txt { color: var(--orange-ink); }
+.alert-list { display: flex; flex-direction: column; }
+.alert-item { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+.ai-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-btns .chip, #adjMin .chip, .bulk .chip { min-width: 46px; min-height: 40px; justify-content: center; font-family: var(--mono, monospace); }
+.bulk { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--stat-bg); font-size: 14px; }
+.bulk:empty { display: none; }
+.alert-feed { display: flex; flex-direction: column; gap: 6px; }
+.alert-feed a { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 10px; text-decoration: none; color: var(--ink); border-left: 4px solid var(--orange); background: var(--orange-soft); font-size: 14px; }
+.alert-feed a.req { border-left-color: var(--green); background: var(--green-soft); }
+.alert-feed a b { font-size: 13px; }

@@ -53,6 +53,11 @@ export async function saveProduct(shopId, p) {
   if (i >= 0) data.products[i] = { ...data.products[i], ...p }; else data.products.push(p);
   await saveData(data);
 }
+export async function setMinStock(shopId, codes, minStock) {
+  const set = new Set(codes);
+  for (const p of data.products) if (set.has(p.code)) { p.minStock = Number(minStock) || 0; p.minStockBy = USER.name; }
+  await saveData(data);
+}
 // Everything is already in memory locally.
 export async function findBills(shopId, { no, customerCode }) {
   return data.bills.filter((b) => (no && b.no === no) || (customerCode && b.customerCode === customerCode));

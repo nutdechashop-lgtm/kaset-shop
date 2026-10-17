@@ -11,3 +11,14 @@ self.addEventListener('fetch', (e) => {
     return res;
   }).catch(() => caches.match(e.request, { ignoreSearch: false }).then((r) => r || caches.match('./index.html'))));
 });
+
+// Tapping a phone notification opens (or focuses) the program on the right page.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = new URL(e.notification.data?.url || './', self.registration.scope).href;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+    const w = list.find((c) => c.url.startsWith(self.registration.scope));
+    if (w) { w.navigate(url).catch(() => {}); return w.focus(); }
+    return self.clients.openWindow(url);
+  }));
+});

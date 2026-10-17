@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -148,4 +148,8 @@ assert.equal(await hashPin('1234', 's'), await hashPin('1234', 's')); assert.not
   dd.receipts = dd.receipts.map((r) => (r.no === wrong.no ? v.receipt : r.no === later.no ? v2.receipt : r));
   assert.equal(daySummary(dd, '2026-10-01').paid, 0);
 }
+// low stock: below the product's own alert level; off when 0; services never
+assert.equal(isLow({ stock: 9, minStock: 10 }), true); assert.equal(isLow({ stock: 10, minStock: 10 }), false);
+assert.equal(isLow({ stock: -1, minStock: 0 }), false); assert.equal(isLow({ stock: 0, minStock: 5, noStock: true }), false);
+assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', stock: 1, minStock: 20 }, { name: 'c', stock: 50, minStock: 20 }]).map((p) => p.name), ['b', 'a']);
 console.log('ALL SHOP CHECKS PASSED');

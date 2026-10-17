@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason } from './shop.js';
+import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -53,6 +53,9 @@ function drawHeader() {
   const pending = inShop ? pendingRequests().length : 0;
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
+  const nAlert = alertsOn() ? currentAlerts().count : 0;
+  $('#bell')?.remove();
+  if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
@@ -86,6 +89,7 @@ const pendingRequests = () => (data?.requests || []).filter((r) => r.status === 
 // Data changed on another device: refresh list screens (never while someone is typing or a dialog is open).
 function onRemoteChange(kind) {
   if (kind === 'settings') { settings = shop.settings; drawHeader(); return; }
+  checkAlerts().catch(() => {});
   if (current !== 'approve') drawHeader(), markNav();
   if (dlg.open || ['sale', 'import', 'settings', 'users', 'bank', 'backup'].includes(current)) return;
   const a = document.activeElement;
@@ -183,6 +187,7 @@ async function enterShop(id) {
   resetCart();
   if (!settings.name && canEditSettings() && !location.hash) location.hash = 'settings';
   render();
+  checkAlerts().catch(() => {});
 }
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
@@ -858,7 +863,7 @@ function viewHome() {
   const today = todayIso();
   const s = shopSnapshot(data, today);
   const tile = (k, v, href, warn) => `<a class="stat tile${warn ? ' warn' : ''}" href="${href}"><div class="k">${k}</div><div class="v">${v}</div></a>`;
-  view.innerHTML = `
+  view.innerHTML = `${alertsCard()}
   <section class="card">
     <h2>วันนี้ ${thDate(today)}</h2>
     <div class="stats">
@@ -877,6 +882,7 @@ function viewHome() {
     <h2>ต้องจัดการ</h2>
     <div class="stats">
       ${tile('รออนุมัติ', pendingRequests().length + ' รายการ', '#approve', pendingRequests().length > 0)}
+      ${tile('สินค้าใกล้หมด', s.lowStock + ' รายการ', '#stock/low', s.lowStock > 0)}
       ${tile('สต๊อกติดลบ', s.negativeStock + ' รายการ', '#stock', s.negativeStock > 0)}
       ${tile('สินค้ายังไม่มีราคา', s.noPrice + ' รายการ', '#products', s.noPrice > 0)}
       ${tile('สำรองล่าสุด', settings.lastBackupAt ? new Date(settings.lastBackupAt).toLocaleDateString('th-TH') : 'ยังไม่เคย', '#backup', !settings.lastBackupAt)}
@@ -886,6 +892,51 @@ function viewHome() {
     <a class="btn primary" href="#sale">ขาย</a><a class="btn" href="#debt">รับชำระ</a><a class="btn" href="#stock">สต๊อก</a><a class="btn" href="#bank">ส่งธนาคาร</a>
   </div>`;
 }
+
+// ---------------- owner alerts on the phone: requests + low stock ----------------
+const alertsOn = () => !!shop && isManager() && isPhone();
+const notifySupported = () => 'Notification' in window && 'serviceWorker' in navigator;
+function currentAlerts() {
+  const req = pendingRequests().map((r) => ({ key: 'r:' + r.id, title: 'คำขอรออนุมัติ', body: `${r.byName || ''} ${({ edit: 'ขอแก้ไขบิล', cancel: 'ขอยกเลิกบิล', rate: 'ขอเปลี่ยนอัตราดอก', voidReceipt: 'ขอยกเลิกใบเสร็จ', costPin: 'ขอดูราคาทุน' })[r.kind] || 'ส่งคำขอ'} ${r.billNo || r.receiptNo || r.productName || ''}`.trim(), url: '#approve' }));
+  const low = lowStock(data?.products).map((p) => ({ key: 'l:' + p.code, title: 'สินค้าใกล้หมด', body: `${p.name} เหลือ ${qtyFmt(p.stock)} ${p.unit} (เตือนเมื่อไม่ถึง ${qtyFmt(p.minStock)})`, url: '#stock/low' }));
+  return { req, low, count: req.length + low.length };
+}
+// Shows a phone notification for anything new since last time (remembered per shop on this phone).
+async function checkAlerts() {
+  if (!alertsOn() || !notifySupported() || Notification.permission !== 'granted') return;
+  const key = 'seenAlerts:' + shopId;
+  let seen; try { seen = JSON.parse(localStorage.getItem(key) || 'null'); } catch { seen = null; }
+  const { req, low } = currentAlerts(); const all = [...req, ...low];
+  const fresh = seen ? all.filter((a) => !seen.includes(a.key)) : all;
+  try { localStorage.setItem(key, JSON.stringify(all.map((a) => a.key))); } catch { /* ignore */ }
+  if (!fresh.length) return;
+  const reg = await navigator.serviceWorker.ready;
+  const shopName = settings.name || settings.label || APP_NAME;
+  const show = (title, body, tag, url) => reg.showNotification(title, { body, tag, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', data: { url: location.pathname + location.search + url } });
+  const fr = fresh.filter((a) => a.key[0] === 'r'), fl = fresh.filter((a) => a.key[0] === 'l');
+  if (fr.length) await show(`${shopName} · ${fr.length === 1 ? fr[0].title : `คำขอรออนุมัติ ${fr.length} รายการ`}`, fr.map((a) => a.body).join('\n'), 'req-' + shopId, '#approve');
+  if (fl.length) await show(`${shopName} · ${fl.length === 1 ? fl[0].title : `สินค้าใกล้หมด ${fl.length} รายการ`}`, fl.map((a) => a.body).join('\n'), 'low-' + shopId, '#stock/low');
+}
+function alertsCard() {
+  if (!isPhone()) return '';
+  const { req, low } = currentAlerts();
+  const perm = notifySupported() ? Notification.permission : 'unsupported';
+  return `<section class="card" id="alertsCard">
+    <h2>แจ้งเตือน</h2>
+    ${perm === 'granted' ? '<div class="ok" style="font-size:14px">เปิดแจ้งเตือนบนมือถือเครื่องนี้แล้ว</div>'
+      : perm === 'denied' ? '<div class="note" style="font-size:14px">มือถือเครื่องนี้ปิดการแจ้งเตือนของโปรแกรมไว้ เปิดได้ที่ ตั้งค่าเบราว์เซอร์ → การแจ้งเตือน</div>'
+      : perm === 'unsupported' ? '<div class="note" style="font-size:14px">เบราว์เซอร์นี้แจ้งเตือนไม่ได้ · iPhone ต้อง "เพิ่มไปยังหน้าจอโฮม" แล้วเปิดจากไอคอนก่อน</div>'
+      : '<button class="btn primary" id="enableNotify" style="justify-content:center">เปิดแจ้งเตือนบนมือถือ</button><div class="muted" style="font-size:13px">แจ้งเมื่อมีคำขอรออนุมัติ และเมื่อสินค้าเหลือต่ำกว่าจุดที่ตั้งไว้</div>'}
+    ${req.length || low.length ? `<div class="alert-feed">${[...req, ...low].slice(0, 8).map((a) => `<a href="${a.url}" class="${a.key[0] === 'l' ? 'low' : 'req'}"><b>${a.title}</b><span>${esc(a.body)}</span></a>`).join('')}${req.length + low.length > 8 ? `<div class="muted" style="font-size:13px">และอีก ${req.length + low.length - 8} รายการ</div>` : ''}</div>` : '<div class="muted">ไม่มีเรื่องที่ต้องดูตอนนี้</div>'}
+  </section>`;
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlerts().catch(() => {}); });
+document.addEventListener('click', async (e) => {
+  if (!e.target.closest('#enableNotify')) return;
+  const r = await Notification.requestPermission();
+  if (r === 'granted') { try { localStorage.removeItem('seenAlerts:' + shopId); } catch { /* ignore */ } toast('เปิดแจ้งเตือนแล้ว'); await checkAlerts(); }
+  if (current === 'home') render();
+});
 
 // ---------------- debtor sub-tabs ----------------
 function dataTabs(active) {
@@ -936,45 +987,112 @@ function viewOverdue() {
 }
 
 // ---------------- stock: count / adjust and transfer to other shops ----------------
+let stockQ = '', stockF = '';
 function viewStock(arg) {
-  const tab = arg === 'transfer' ? 'transfer' : 'count';
-  view.innerHTML = `<div class="tabs" role="tablist"><a href="#stock" role="tab" aria-selected="${tab === 'count'}">นับ / ปรับสต๊อก</a><a href="#stock/transfer" role="tab" aria-selected="${tab === 'transfer'}">โอนสต๊อกไปร้านอื่น</a></div><div id="stockBody"></div>`;
-  return tab === 'transfer' ? stockTransfers() : stockCount();
+  const tab = arg === 'transfer' ? 'transfer' : arg === 'alert' ? 'alert' : 'count';
+  if (arg === 'low') stockF = 'low';
+  const nLow = lowStock(data.products).length;
+  view.innerHTML = `<div class="tabs" role="tablist"><a href="#stock" role="tab" aria-selected="${tab === 'count'}">นับ / ปรับสต๊อก</a><a href="#stock/alert" role="tab" aria-selected="${tab === 'alert'}">ตั้งเตือนใกล้หมด${nLow ? ` <span class="badge">${nLow}</span>` : ''}</a><a href="#stock/transfer" role="tab" aria-selected="${tab === 'transfer'}">โอนสต๊อกไปร้านอื่น</a></div><div id="stockBody"></div>`;
+  return tab === 'transfer' ? stockTransfers() : tab === 'alert' ? stockAlerts() : stockCount();
 }
+const minTag = (p) => (Number(p.minStock) > 0 ? `<span class="min-tag${isLow(p) ? ' low' : ''}">${isLow(p) ? 'ใกล้หมด · ' : ''}เตือน &lt; ${qtyFmt(p.minStock)}</span>` : '');
+const stockMatch = (p, q) => !q || norm(p.name).includes(norm(q)) || p.code.startsWith(q.trim());
 function stockCount() {
+  const nLow = lowStock(data.products).length;
   $('#stockBody').innerHTML = `<section class="card">
-    <input type="search" id="sq" placeholder="ค้นหาสินค้า" autocomplete="off" style="font-size:18px;min-height:52px">
-    <div class="row"><button class="chip" data-f="" aria-pressed="true">ทั้งหมด</button><button class="chip" data-f="neg" aria-pressed="false">ติดลบ</button><button class="chip" data-f="low" aria-pressed="false">เหลือน้อย (≤ 5)</button></div>
+    <input type="search" id="sq" placeholder="ค้นหาสินค้า" autocomplete="off" style="font-size:18px;min-height:52px" value="${esc(stockQ)}">
+    <div class="row"><button class="chip" data-f="">ทั้งหมด</button><button class="chip" data-f="low">ใกล้หมด (${nLow})</button><button class="chip" data-f="neg">ติดลบ</button></div>
     <div id="sl" class="stock-list"></div></section>`;
-  let f = '';
   const draw = () => {
-    const n = norm($('#sq').value);
-    const list = liveProducts().filter((p) => !p.noStock && (!n || norm(p.name).includes(n) || p.code.startsWith($('#sq').value.trim()))
-      && (!f || (f === 'neg' ? p.stock < 0 : p.stock <= 5))).sort((a, b) => a.name.localeCompare(b.name, 'th')).slice(0, 80);
-    $('#sl').innerHTML = list.length ? list.map((p) => `<button class="stock-item" data-c="${esc(p.code)}"><span><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}</span></span><span class="stock-n${p.stock < 0 ? ' neg' : ''}">${qtyFmt(p.stock)}</span></button>`).join('') : '<div class="empty">ไม่พบสินค้า</div>';
+    $$('#stockBody [data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === stockF));
+    const list = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!stockF || (stockF === 'neg' ? p.stock < 0 : isLow(p))))
+      .sort((a, b) => a.name.localeCompare(b.name, 'th')).slice(0, 80);
+    $('#sl').innerHTML = list.length ? list.map((p) => `<button class="stock-item" data-c="${esc(p.code)}"><span><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}</span> ${minTag(p)}</span><span class="stock-n${p.stock < 0 ? ' neg' : isLow(p) ? ' low' : ''}">${qtyFmt(p.stock)}</span></button>`).join('')
+      : `<div class="empty">${stockF === 'low' ? 'ไม่มีสินค้าใกล้หมด · ตั้งจุดเตือนได้ที่แท็บ "ตั้งเตือนใกล้หมด"' : 'ไม่พบสินค้า'}</div>`;
   };
-  $('#sq').addEventListener('input', draw);
-  $$('#stockBody [data-f]').forEach((b) => b.addEventListener('click', () => { f = b.dataset.f; $$('#stockBody [data-f]').forEach((x) => x.setAttribute('aria-pressed', x === b)); draw(); }));
+  $('#sq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
+  $$('#stockBody [data-f]').forEach((b) => b.addEventListener('click', () => { stockF = b.dataset.f; draw(); }));
   $('#sl').addEventListener('click', (e) => { const b = e.target.closest('[data-c]'); if (b) adjustDialog(liveProducts().find((p) => p.code === b.dataset.c)); });
   draw();
 }
+// One tap per product: set the "alert below" level from preset buttons.
+let alertF = '';
+function minButtons(cur, attr) {
+  const c = Number(cur) || 0, custom = c > 0 && !MIN_PRESETS.includes(c);
+  return `<button type="button" class="chip" ${attr}="0" aria-pressed="${!c}">ไม่เตือน</button>${MIN_PRESETS.map((v) => `<button type="button" class="chip" ${attr}="${v}" aria-pressed="${c === v}">${v}</button>`).join('')}<button type="button" class="chip" ${attr}="other" aria-pressed="${custom}">${custom ? qtyFmt(c) : 'อื่น ๆ'}</button>`;
+}
+function askNumber(title, cur, done) {
+  openDialog(`<h2>${title}</h2><label class="field">เตือนเมื่อเหลือไม่ถึง<input type="number" name="n" min="0" step="any" value="${cur || ''}" style="font-size:24px;text-align:center" autofocus></label>
+    <div class="row"><button class="btn primary" value="ok">ตั้ง</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => { await done(Math.max(0, Number(f.n.value) || 0)); });
+}
+function stockAlerts() {
+  $('#stockBody').innerHTML = `<section class="card">
+    <div class="muted" style="font-size:14px">แตะตัวเลขเพื่อตั้ง <b>เตือนเมื่อเหลือไม่ถึง…</b> บันทึกทันที · เจ้าของร้านจะได้รับแจ้งเตือนบนมือถือเมื่อสินค้าเหลือต่ำกว่าที่ตั้งไว้</div>
+    <input type="search" id="aq" placeholder="ค้นหาสินค้า เช่น ปุ๋ย" autocomplete="off" style="font-size:18px;min-height:52px" value="${esc(stockQ)}">
+    <div class="row"><button class="chip" data-af="">ทั้งหมด</button><button class="chip" data-af="none">ยังไม่ตั้ง</button><button class="chip" data-af="set">ตั้งแล้ว</button><button class="chip" data-af="low">ใกล้หมด</button></div>
+    <div class="bulk" id="bulk"></div>
+    <div id="al" class="alert-list"></div></section>`;
+  let shown = [];
+  const draw = () => {
+    $$('#stockBody [data-af]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.af === alertF));
+    const all = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!alertF || (alertF === 'none' ? !(p.minStock > 0) : alertF === 'set' ? p.minStock > 0 : isLow(p))))
+      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    shown = all.slice(0, 80);
+    $('#bulk').innerHTML = all.length > 1 ? `<span>ตั้งทั้ง <b>${all.length}</b> รายการที่แสดงอยู่เป็น</span><div class="row" style="gap:6px">${minButtons(-1, 'data-bulk')}</div>` : '';
+    $$('#bulk [aria-pressed]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
+    $('#al').innerHTML = shown.length ? shown.map((p) => `<div class="alert-item"><div class="ai-name"><b>${esc(p.name)}</b><span class="muted"> · เหลือ <b class="mono${isLow(p) ? ' low-txt' : ''}">${qtyFmt(p.stock)}</b> ${esc(p.unit)}</span></div>
+      <div class="ai-btns" data-code="${esc(p.code)}">${minButtons(p.minStock, 'data-min')}</div></div>`).join('') + (all.length > shown.length ? `<div class="muted" style="font-size:13px">แสดง 80 จาก ${all.length} รายการ · พิมพ์ค้นหาเพื่อให้แคบลง</div>` : '')
+      : '<div class="empty">ไม่พบสินค้า</div>';
+    $('#bulk').dataset.codes = all.map((p) => p.code).join('|');
+  };
+  const apply = async (codes, v, label) => {
+    await backend.setMinStock(shopId, codes, v);
+    toast(v ? `${label}: เตือนเมื่อเหลือไม่ถึง ${qtyFmt(v)}` : `${label}: ไม่เตือน`);
+    if (backend.mode === 'local') draw();
+  };
+  $('#aq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
+  $$('#stockBody [data-af]').forEach((b) => b.addEventListener('click', () => { alertF = b.dataset.af; draw(); }));
+  $('#al').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-min]'); if (!b) return;
+    const code = b.parentElement.dataset.code, p = liveProducts().find((x) => x.code === code);
+    const run = (v) => { b.parentElement.innerHTML = minButtons(v, 'data-min'); return apply([code], v, p.name); };
+    if (b.dataset.min === 'other') askNumber(esc(p.name), p.minStock, run); else run(Number(b.dataset.min)).catch((er) => toast(er.message));
+  });
+  $('#bulk').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-bulk]'); if (!b) return;
+    const codes = $('#bulk').dataset.codes.split('|').filter(Boolean);
+    const go = (v) => openDialog(`<h2>ตั้งเตือน ${codes.length} รายการ</h2><div>${v ? `เตือนเมื่อเหลือไม่ถึง <b>${qtyFmt(v)}</b>` : '<b>ไม่เตือน</b>'} สำหรับสินค้าทั้ง ${codes.length} รายการที่แสดงอยู่${stockQ ? ` (ค้นหา "${esc(stockQ)}")` : ''}</div>
+      <div class="row"><button class="btn primary" value="ok">ตั้งเลย</button><button class="btn" value="cancel">ยกเลิก</button></div>`, async () => { await apply(codes, v, `${codes.length} รายการ`); setTimeout(draw, 0); });
+    if (b.dataset.bulk === 'other') askNumber(`ตั้งเตือน ${codes.length} รายการ`, '', async (v) => { setTimeout(() => go(v), 0); }); else go(Number(b.dataset.bulk));
+  });
+  draw();
+}
 async function adjustDialog(p) {
+  let newMin = Number(p.minStock) || 0;
   const f = openDialog(`<h2>${esc(p.name)}</h2>
     <div class="muted">ในระบบตอนนี้ <b>${qtyFmt(p.stock)}</b> ${esc(p.unit)}</div>
     <label class="field">นับได้จริง (${esc(p.unit)})
       <div class="row" style="flex-wrap:nowrap"><button class="btn" type="button" data-step="-1" aria-label="ลด">−</button>
       <input type="number" name="counted" step="any" value="${p.stock}" style="font-size:24px;text-align:center;font-family:var(--mono);flex:1;min-width:0">
       <button class="btn" type="button" data-step="1" aria-label="เพิ่ม">+</button></div></label>
+    <div class="field">เตือนเมื่อเหลือไม่ถึง<div class="row" style="gap:6px" id="adjMin">${minButtons(p.minStock, 'data-min')}</div></div>
     <label class="field">เหตุผล<select name="reason"><option>นับสต๊อกจริง</option><option>รับของเข้า</option><option>ของเสีย / หมดอายุ</option><option>คืนผู้ขาย</option><option>อื่น ๆ</option></select></label>
     <div id="logs" class="muted" style="font-size:13px"></div>
     <div class="err hidden dlg-err"></div>
     <div class="row"><button class="btn primary" value="ok">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (form) => {
     const n = Number(form.counted.value);
     if (!Number.isFinite(n)) throw new Error('ใส่จำนวน');
+    if (newMin !== (Number(p.minStock) || 0)) await backend.setMinStock(shopId, [p.code], newMin);
+    if (n === p.stock && newMin !== (Number(p.minStock) || 0)) { toast(`ตั้งเตือน ${p.name} แล้ว`); setTimeout(() => current === 'stock' && viewStock(), 0); return; }
     await backend.adjustStock(shopId, p.code, n, form.reason.value);
     toast(`บันทึก ${p.name} = ${qtyFmt(n)}`); setTimeout(() => current === 'stock' && viewStock(), 0);
   });
   $$('[data-step]', f).forEach((b) => b.addEventListener('click', () => { f.counted.value = round2((Number(f.counted.value) || 0) + Number(b.dataset.step)); }));
+  $('#adjMin', f).addEventListener('click', (e) => {
+    const b = e.target.closest('[data-min]'); if (!b) return;
+    const set = (v) => { newMin = v; $('#adjMin', f).innerHTML = minButtons(v, 'data-min'); };
+    if (b.dataset.min === 'other') { const v = prompt('เตือนเมื่อเหลือไม่ถึงกี่ ' + p.unit, newMin || ''); if (v !== null) set(Math.max(0, Number(v) || 0)); } else set(Number(b.dataset.min));
+  });
   try {
     const logs = (await backend.stockLogs(shopId, p.code)).slice(0, 5);
     if (logs.length && $('#logs', f)) $('#logs', f).innerHTML = 'ปรับล่าสุด: ' + logs.map((l) => `${new Date(l.at).toLocaleDateString('th-TH')} ${esc(l.by)} ${qtyFmt(l.from)}→${qtyFmt(l.to)} (${esc(l.reason)})`).join(' · ');
@@ -1153,6 +1271,7 @@ function productForm(p) {
       <label class="field">ราคาขาย (บาท)<input type="number" name="price" min="0" step="0.01" value="${p.price || ''}"></label>
       <label class="field">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
     </div>
+    <label class="field">เตือนเมื่อเหลือไม่ถึง <span class="muted" style="font-weight:400">(ว่าง / 0 = ไม่เตือน)</span><input type="number" name="minStock" min="0" step="any" value="${p.minStock || ''}" placeholder="เช่น 10"></label>
     <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" name="noStock" ${p.noStock ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ไม่มีสต๊อก (งานบริการ เช่น ไถแปร โดรนพ่นยา)</label>
     ${canSeeCost() ? `<label class="field">ราคาทุน (บาท) <span class="muted" style="font-weight:400">· ${isManager() ? 'พนักงานมองไม่เห็นช่องนี้' : 'ปลดล็อกด้วย PIN ถึง ' + new Date(costUnlockedUntil).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</span><input type="number" name="cost" min="0" step="0.01" value="${p.cost || ''}"></label>`
       : `<div class="stat" style="display:flex;flex-direction:column;gap:6px"><div class="k">ราคาทุน: ต้องใช้ PIN จากแอดมิน</div>
@@ -1182,7 +1301,7 @@ function productForm(p) {
     const code = v.code.trim();
     if (!/^[^/]+$/.test(code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
     if (isNew && liveProducts().some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
-    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
+    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, minStock: Math.max(0, Number(v.minStock) || 0), noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
     if (canSeeCost() && v.cost !== undefined) rec.cost = round2(Number(v.cost) || 0);
     else if (isNew) rec.cost = 0;
     if (isNew) rec.group = '';
