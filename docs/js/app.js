@@ -41,10 +41,10 @@ function toast(msg) {
 // ---------------- header / routing ----------------
 const NAV = [
   ['home', 'หน้าแรก', true], ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า'], ['stock', 'สต๊อก / โอน'],
-  ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['import', 'นำเข้าข้อมูลเก่า', true], ['backup', 'สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
+  ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 // Sub-pages that light up a main menu item.
-const NAV_PARENT = { paid: 'debt', overdue: 'debt', bill: 'bills' };
+const NAV_PARENT = { paid: 'debt', overdue: 'debt', bill: 'bills', import: 'backup' };
 const isPhone = () => window.matchMedia('(max-width: 700px)').matches;
 // Where each person lands: owners/admin → home, staff on a phone → stock, staff on a computer → sale.
 const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
@@ -73,7 +73,7 @@ let current = 'sale';
 function render() {
   if (!shop) return;
   let [name, arg] = (location.hash.slice(1) || defaultPage()).split('/');
-  if (!routes[name] || (NAV.find((n) => n[0] === name)?.[2] && !isManager())) name = defaultPage();
+  if (!routes[name] || (NAV.find((n) => n[0] === (NAV_PARENT[name] || name))?.[2] && !isManager())) name = defaultPage();
   current = name;
   drawHeader(); markNav();
   $('#today').textContent = 'วันที่ ' + thDate(todayIso());
@@ -823,6 +823,9 @@ function viewHome() {
 }
 
 // ---------------- debtor sub-tabs ----------------
+function dataTabs(active) {
+  return `<div class="tabs" role="tablist">${[['backup', 'สำรอง / กู้คืนข้อมูล'], ['import', 'นำเข้าข้อมูลจากโปรแกรมเก่า']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
+}
 function debtTabs(active) {
   return `<div class="tabs" role="tablist">${[['debt', 'ลูกหนี้ทั้งหมด'], ['paid', 'ลูกค้าชำระแล้ว'], ['overdue', 'ค้างนานเกิน 6 เดือน']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
 }
@@ -1212,7 +1215,7 @@ function runImport(bytes, opts) {
 }
 async function viewImport() {
   const info = await backend.shopInfo(shopId).catch(() => ({}));
-  view.innerHTML = `
+  view.innerHTML = `${dataTabs('import')}
   <div class="note">ก่อนเริ่ม: <b>ปิดโปรแกรมเก่า</b>ก่อน ไม่งั้นข้อมูลล่าสุดอาจยังไม่ถูกบันทึกลงไฟล์ · ระบบอ่านไฟล์อย่างเดียว ไม่แก้ไฟล์เดิม</div>
   <section class="card"><div class="step"><span class="n">1</span><div style="flex:1;display:flex;flex-direction:column;gap:10px">
     <h2>เลือกโฟลเดอร์โปรแกรมเก่า</h2>
@@ -1340,7 +1343,7 @@ async function viewBackup() {
   const dir = await getBackupDir().catch(() => null);
   const isAdmin = user.role === 'admin' && !previewing();
   const meta = { ...settings, id: shopId };
-  view.innerHTML = `
+  view.innerHTML = `${dataTabs('backup')}
   <section class="card">
     <h2>สำรองข้อมูลลงเครื่อง</h2>
     <div class="muted" style="font-size:14px">สำรองล่าสุด: ${settings.lastBackupAt ? `${new Date(settings.lastBackupAt).toLocaleString('th-TH')} โดย ${esc(settings.lastBackupBy || '')}` : '<b style="color:var(--orange-ink)">ยังไม่เคยสำรอง</b>'}</div>
