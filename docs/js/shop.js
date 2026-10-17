@@ -266,3 +266,106 @@ export function bahtText(amount) {
   const abs = Math.abs(n), baht = Math.floor(abs / 100), satang = abs % 100;
   return neg + (baht ? words(baht) + 'บาท' : '') + (satang ? words(satang) + 'สตางค์' : 'ถ้วน');
 }
+
+// ---------- interest rate change on an open credit bill ----------
+// The new rate applies to the period that hasn't been paid yet (same as changing it at payment in the old program).
+export function changeBillRate(bill, rate, { by = '', reason = '', at = new Date().toISOString() } = {}) {
+  if (!bill || bill.type !== 'credit' || bill.status !== 'open') throw new Error('เปลี่ยนอัตราได้เฉพาะบิลเงินเชื่อที่ยังค้าง');
+  const r = Number(rate);
+  if (!RATES.includes(r)) throw new Error('อัตราดอกไม่ถูกต้อง');
+  if (r === bill.rate) throw new Error('อัตราเดิมอยู่แล้ว');
+  return { ...bill, rate: r, rateHistory: [...(bill.rateHistory || []), { at, by, reason, from: bill.rate, to: r }] };
+}
+
+// ---------- stock transfers to another shop (only the source shop's stock goes down) ----------
+function transferLines(products, lines) {
+  const prodBy = new Map(products.map((p) => [p.code, p]));
+  const out = (lines || []).filter((l) => l.code && Number(l.qty) > 0).map((l) => {
+    const p = prodBy.get(l.code);
+    if (!p) throw new Error('ไม่พบสินค้ารหัส ' + l.code);
+    return { code: p.code, name: p.name, unit: p.unit, qty: Number(l.qty) };
+  });
+  if (!out.length) throw new Error('ยังไม่มีรายการสินค้า');
+  return out;
+}
+const qtyMap = (lines) => { const m = new Map(); for (const l of lines) m.set(l.code, round2((m.get(l.code) || 0) + l.qty)); return m; };
+function stockDelta(products, before, after) {
+  const prodBy = new Map(products.map((p) => [p.code, p]));
+  const out = new Map(), b = qtyMap(before), a = qtyMap(after);
+  for (const code of new Set([...b.keys(), ...a.keys()])) {
+    const p = prodBy.get(code); if (!p || p.noStock) continue;
+    const d = round2((b.get(code) || 0) - (a.get(code) || 0));
+    if (d) out.set(code, d);
+  }
+  return out;
+}
+export function makeTransfer(products, input, no) {
+  const to = String(input.to || '').trim();
+  if (!to) throw new Error('ใส่ร้านปลายทาง');
+  const lines = transferLines(products, input.lines);
+  const transfer = { no, date: input.date || todayIso(), to, lines, note: input.note || '', by: input.by || '', status: 'active', edits: 0, createdAt: new Date().toISOString() };
+  return { transfer, stock: stockDelta(products, [], lines) };
+}
+export function editTransfer(products, t, changes, { by = '', at = new Date().toISOString() } = {}) {
+  if (t.status === 'cancelled') throw new Error('รายการโอนนี้ถูกยกเลิกแล้ว');
+  const lines = transferLines(products, changes.lines);
+  const to = String(changes.to ?? t.to).trim();
+  if (!to) throw new Error('ใส่ร้านปลายทาง');
+  const next = { ...t, to, lines, note: changes.note ?? t.note, edits: (t.edits || 0) + 1, editHistory: [...(t.editHistory || []), { at, by, before: { to: t.to, lines: t.lines } }] };
+  return { transfer: next, stock: stockDelta(products, t.lines, lines) };
+}
+export function cancelTransfer(products, t, { by = '', reason = '', at = new Date().toISOString() } = {}) {
+  if (t.status === 'cancelled') throw new Error('รายการโอนนี้ถูกยกเลิกแล้ว');
+  return { transfer: { ...t, status: 'cancelled', cancelledAt: at, cancelledBy: by, cancelReason: reason }, stock: stockDelta(products, t.lines, []) };
+}
+
+// ---------- lists for the debtor screens and the bank PDF ----------
+export function overdueBills(data, asOf, days = 180) {
+  const limit = new Date(Date.parse(asOf + 'T00:00:00Z') - days * 86400000).toISOString().slice(0, 10);
+  return data.bills.filter((b) => b.type === 'credit' && b.status === 'open' && b.date <= limit)
+    .map((b) => ({ ...b, balance: billBalance(b, asOf), age: Math.round((Date.parse(asOf) - Date.parse(b.date)) / 86400000) }))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+// Debtors grouped by village (zone). opts: { zones: [..] } or { codes: [..] }; empty = everyone.
+export function bankList(data, asOf, opts = {}) {
+  const debts = customerDebts(data, asOf);
+  const cus = new Map(data.customers.map((c) => [c.code, c]));
+  const groups = new Map();
+  for (const [code, d] of debts) {
+    const c = cus.get(code) || { code, name: 'รหัส ' + code, zone: '' };
+    const zone = c.zone || 'ไม่ระบุหมู่บ้าน';
+    if (opts.zones?.length && !opts.zones.includes(zone)) continue;
+    if (opts.codes?.length && !opts.codes.includes(code)) continue;
+    const g = groups.get(zone) || { zone, rows: [], total: 0 };
+    g.rows.push({ code, name: c.name, bills: d.bills.length, principal: d.principal, interest: d.interest, total: d.total });
+    g.total = round2(g.total + d.total);
+    groups.set(zone, g);
+  }
+  const list = [...groups.values()].sort((a, b) => a.zone.localeCompare(b.zone, 'th'));
+  for (const g of list) g.rows.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  return { groups: list, people: list.reduce((s, g) => s + g.rows.length, 0), total: round2(list.reduce((s, g) => s + g.total, 0)) };
+}
+// One shop at a glance (home screen / admin overview).
+export function shopSnapshot(data, asOf) {
+  const debts = customerDebts(data, asOf);
+  let principal = 0, interest = 0, bills = 0;
+  for (const d of debts.values()) { principal += d.principal; interest += d.interest; bills += d.bills.length; }
+  return {
+    today: daySummary(data, asOf), debtors: debts.size, openBills: bills,
+    principal: round2(principal), interest: round2(interest), debt: round2(principal + interest),
+    overdue: overdueBills(data, asOf).length,
+    pending: (data.requests || []).filter((r) => r.status === 'pending').length,
+    negativeStock: (data.products || []).filter((p) => !p.deleted && !p.noStock && p.stock < 0).length,
+    noPrice: (data.products || []).filter((p) => !p.deleted && !p.price).length,
+  };
+}
+
+// ---------- cost PIN (4 digits, issued by the super-admin) ----------
+export function newPin() {
+  const a = new Uint32Array(1); globalThis.crypto.getRandomValues(a);
+  return String(a[0] % 10000).padStart(4, '0');
+}
+export async function hashPin(pin, salt) {
+  const buf = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
+  return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}

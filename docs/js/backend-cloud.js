@@ -5,7 +5,7 @@
 //   shops/{shopId}/customers|products|bills|receipts|counters/{id}
 import * as fb from './firebase.bundle.js';
 import { firebaseConfig } from './firebase-config.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso, editBill, cancelBill } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, docHead, maxRunning, todayIso, editBill, cancelBill, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, newPin, hashPin } from './shop.js';
 import { addDays } from './interest.js';
 
 export const mode = 'cloud';
@@ -113,15 +113,16 @@ let data = null;
 export function closeShop() { unsubs.forEach((u) => u()); unsubs = []; data = null; }
 export async function openShop(shopId, onChange) {
   closeShop();
-  data = { customers: [], products: [], bills: [], receipts: [], requests: [] };
+  data = { customers: [], products: [], bills: [], receipts: [], requests: [], transfers: [] };
   const settingsBox = { value: { ...DEFAULT_SETTINGS } };
-  const maps = { customers: new Map(), products: new Map(), billsOpen: new Map(), billsRecent: new Map(), receipts: new Map(), requests: new Map() };
+  const maps = { customers: new Map(), products: new Map(), billsOpen: new Map(), billsRecent: new Map(), receipts: new Map(), requests: new Map(), transfers: new Map() };
   const rebuild = () => {
     data.customers = [...maps.customers.values()];
     data.products = [...maps.products.values()];
     data.bills = [...new Map([...maps.billsRecent, ...maps.billsOpen]).values()];
     data.receipts = [...maps.receipts.values()];
     data.requests = [...maps.requests.entries()].map(([id, r]) => ({ id, ...r }));
+    data.transfers = [...maps.transfers.values()];
   };
   let timer = null, ready = false;
   const changed = () => { rebuild(); if (ready) { clearTimeout(timer); timer = setTimeout(() => onChange?.(), 250); } };
@@ -149,6 +150,7 @@ export async function openShop(shopId, onChange) {
     listen(fb.query(sub(shopId, 'bills'), fb.where('date', '>=', cutoff)), 'billsRecent'),
     listen(fb.query(sub(shopId, 'receipts'), fb.where('date', '>=', cutoff)), 'receipts'),
     listen(fb.query(sub(shopId, 'requests'), fb.where('status', '==', 'pending')), 'requests'),
+    listen(fb.query(sub(shopId, 'transfers'), fb.where('date', '>=', addDays(todayIso(), -90))), 'transfers'),
   ]);
   rebuild(); ready = true;
   return { data, get settings() { return settingsBox.value; } };
@@ -287,7 +289,8 @@ async function billChangeTx(tx, shopId, billNo, kind, changes, meta) {
   const ref = sub(shopId, 'bills', billNo);
   const snap = await tx.get(ref);
   if (!snap.exists()) throw new Error('ไม่พบบิล ' + billNo);
-  const res = kind === 'cancel' ? cancelBill(data.products, snap.data(), meta) : editBill(data.products, snap.data(), changes, meta);
+  const cur = snap.data();
+  const res = kind === 'cancel' ? cancelBill(data.products, cur, meta) : kind === 'rate' ? { bill: changeBillRate(cur, changes.rate, meta), stock: new Map() } : editBill(data.products, cur, changes, meta);
   return () => {
     tx.set(ref, res.bill);
     for (const [code, d] of res.stock) tx.update(sub(shopId, 'products', code), { stock: fb.increment(d) });
@@ -316,7 +319,7 @@ export async function resolveRequest(shopId, id, approve, meta) {
 }
 
 // ---------- backup / restore / delete a whole shop ----------
-export const SHOP_COLLECTIONS = ['customers', 'products', 'bills', 'receipts', 'requests', 'counters'];
+export const SHOP_COLLECTIONS = ['customers', 'products', 'bills', 'receipts', 'requests', 'counters', 'transfers', 'stockLogs'];
 const BATCH_SIZE = 400;
 async function commitInBatches(ops, onStep) {
   for (let i = 0; i < ops.length; i += BATCH_SIZE) {
@@ -372,4 +375,85 @@ export async function deleteShop(shopId, onProgress) {
 }
 export async function markBackup(shopId) {
   await wrap(() => fb.setDoc(shopDoc(shopId), { lastBackupAt: new Date().toISOString(), lastBackupBy: me.name }, { merge: true }));
+}
+
+// ---------- stock: transfers to other shops and counted adjustments ----------
+export async function commitTransfer(shopId, settings, input) {
+  const date = input.date || todayIso();
+  const head = docHead(settings.prefix, 'TR', date);
+  const localMax = maxRunning(head, data.transfers.map((t) => t.no));
+  return wrap(() => fb.runTransaction(db, async (tx) => {
+    const cref = sub(shopId, 'counters', head);
+    const cs = await tx.get(cref);
+    const no = head + String(Math.max(cs.exists() ? cs.data().n : 0, localMax) + 1).padStart(4, '0');
+    const { transfer, stock } = makeTransfer(data.products, { ...input, date, by: me.name }, no);
+    tx.set(cref, { n: +no.slice(head.length) });
+    tx.set(sub(shopId, 'transfers', no), transfer);
+    for (const [code, d] of stock) tx.update(sub(shopId, 'products', code), { stock: fb.increment(d) });
+    return transfer;
+  }));
+}
+export async function changeTransfer(shopId, no, kind, changes, meta = {}) {
+  return wrap(() => fb.runTransaction(db, async (tx) => {
+    const ref = sub(shopId, 'transfers', no);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('ไม่พบรายการโอน ' + no);
+    const m = { ...meta, by: meta.by || me.name };
+    const res = kind === 'cancel' ? cancelTransfer(data.products, snap.data(), m) : editTransfer(data.products, snap.data(), changes, m);
+    tx.set(ref, res.transfer);
+    for (const [code, d] of res.stock) tx.update(sub(shopId, 'products', code), { stock: fb.increment(d) });
+    return res.transfer;
+  }));
+}
+export async function findTransfers(shopId) {
+  const snap = await wrap(() => fb.getDocs(sub(shopId, 'transfers')));
+  return snap.docs.map((d) => d.data());
+}
+// Set the counted stock and keep a log line of the change.
+export async function adjustStock(shopId, code, counted, reason) {
+  return wrap(() => fb.runTransaction(db, async (tx) => {
+    const ref = sub(shopId, 'products', code);
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error('ไม่พบสินค้า');
+    const p = snap.data(); const to = Number(counted);
+    tx.update(ref, { stock: to });
+    tx.set(fb.doc(sub(shopId, 'stockLogs')), { code, name: p.name, from: p.stock || 0, to, reason: reason || '', by: me.name, at: new Date().toISOString() });
+    return to;
+  }));
+}
+export async function stockLogs(shopId, code) {
+  const snap = await wrap(() => fb.getDocs(fb.query(sub(shopId, 'stockLogs'), fb.where('code', '==', code))));
+  return snap.docs.map((d) => d.data()).sort((a, b) => (a.at < b.at ? 1 : -1));
+}
+
+// ---------- cost PIN ----------
+// The super-admin issues a random 4-digit PIN for a staff request; only its hash is stored.
+export async function issueCostPin(shopId, requestId) {
+  const pin = newPin(), salt = newPin() + Date.now();
+  const pinHash = await hashPin(pin, salt);
+  await wrap(() => fb.updateDoc(sub(shopId, 'requests', requestId), { status: 'approved', pinHash, salt, issuedBy: me.name, issuedAt: new Date().toISOString(), resolvedBy: me.name, resolvedAt: new Date().toISOString() }));
+  return pin;
+}
+export async function useCostPin(shopId, pin) {
+  const snap = await wrap(() => fb.getDocs(fb.query(sub(shopId, 'requests'), fb.where('byUid', '==', me.uid))));
+  const dayAgo = new Date(Date.now() - 86400000).toISOString();
+  for (const d of snap.docs) {
+    const r = d.data();
+    if (r.kind !== 'costPin' || r.status !== 'approved' || !r.pinHash || (r.issuedAt || '') < dayAgo) continue;
+    if (await hashPin(String(pin).trim(), r.salt) === r.pinHash) { await wrap(() => fb.updateDoc(d.ref, { status: 'used', usedAt: new Date().toISOString() })); return true; }
+  }
+  return false;
+}
+
+// ---------- overview of every shop (super-admin) ----------
+export async function shopOverview(shopId) {
+  const today = todayIso();
+  const [bt, rt, open, rq] = await Promise.all([
+    fb.getDocs(fb.query(sub(shopId, 'bills'), fb.where('date', '==', today))),
+    fb.getDocs(fb.query(sub(shopId, 'receipts'), fb.where('date', '==', today))),
+    fb.getDocs(fb.query(sub(shopId, 'bills'), fb.where('status', '==', 'open'))),
+    fb.getDocs(fb.query(sub(shopId, 'requests'), fb.where('status', '==', 'pending'))),
+  ].map((q) => wrap(() => q)));
+  const bills = new Map([...bt.docs, ...open.docs].map((d) => [d.id, d.data()]));
+  return shopSnapshot({ customers: [], products: [], bills: [...bills.values()], receipts: rt.docs.map((d) => d.data()), requests: rq.docs.map((d) => d.data()) }, today);
 }

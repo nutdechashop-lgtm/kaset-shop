@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -94,4 +94,31 @@ assert.equal(bahtText(74243.96), 'เจ็ดหมื่นสี่พัน�
 assert.equal(bahtText(0.5), 'ห้าสิบสตางค์');
 // receipt keeps what was owed before paying
 assert.equal(r1.owedTotal, 7544.65); assert.equal(r1.remaining, 2544.65); assert.equal(r1.owed.length, 2);
+// rate change applies to the unpaid period
+const gb = data.bills.find((x) => x.customerCode === '019' && x.status === 'open');
+const cr = changeBillRate(gb, 1, { by: 'แม่', reason: 'ลูกค้าประจำ' });
+assert.equal(cr.rate, 1); assert.equal(cr.rateHistory[0].from, 2);
+assert.throws(() => changeBillRate(data.bills.find((x) => x.no === a.no), 1), /ยังค้าง/);
+assert.throws(() => changeBillRate(gb, 3), /ไม่ถูกต้อง/);
+// transfers: only source stock goes down; edit adjusts by the difference; cancel returns it
+const tr = makeTransfer(data.products, { to: 'สาขาโป่งแค', lines: [{ code: '000001', qty: 4 }, { code: '000003', qty: 2 }], by: 'สมศรี' }, '01-TR6910170001');
+assert.equal(tr.stock.get('000001'), -4); assert.equal(tr.stock.has('000003'), false); // service item has no stock
+const te = editTransfer(data.products, tr.transfer, { lines: [{ code: '000001', qty: 1 }] });
+assert.equal(te.stock.get('000001'), 3); assert.equal(te.transfer.edits, 1);
+const tc = cancelTransfer(data.products, te.transfer, { by: 'สมศรี' });
+assert.equal(tc.stock.get('000001'), 1); assert.equal(tc.transfer.status, 'cancelled');
+assert.throws(() => makeTransfer(data.products, { to: '', lines: [{ code: '000001', qty: 1 }] }), /ปลายทาง/);
+// overdue (> 6 months) and bank list
+const od = { customers: [{ code: '1', name: 'ก', zone: 'หนองบัว' }, { code: '2', name: 'ข', zone: 'ดอนสัก' }], products: [], receipts: [], requests: [{ status: 'pending' }],
+  bills: [{ no: 'x1', date: '2026-01-10', type: 'credit', status: 'open', rate: 0, total: 1000, principalLeft: 1000, customerCode: '1' },
+          { no: 'x2', date: '2026-09-10', type: 'credit', status: 'open', rate: 0, total: 500, principalLeft: 500, customerCode: '2' }] };
+assert.deepEqual(overdueBills(od, '2026-10-17').map((b) => b.no), ['x1']);
+const bl = bankList(od, '2026-10-17');
+assert.equal(bl.total, 1500); assert.equal(bl.groups.length, 2); assert.equal(bl.groups[0].zone, 'ดอนสัก');
+assert.equal(bankList(od, '2026-10-17', { zones: ['หนองบัว'] }).total, 1000);
+assert.equal(bankList(od, '2026-10-17', { codes: ['2'] }).people, 1);
+const snap = shopSnapshot(od, '2026-10-17'); assert.equal(snap.debt, 1500); assert.equal(snap.overdue, 1); assert.equal(snap.pending, 1);
+// PIN
+const pin = newPin(); assert.match(pin, /^\d{4}$/);
+assert.equal(await hashPin('1234', 's'), await hashPin('1234', 's')); assert.notEqual(await hashPin('1234', 's'), await hashPin('1235', 's'));
 console.log('ALL SHOP CHECKS PASSED');

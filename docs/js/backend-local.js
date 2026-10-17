@@ -1,7 +1,7 @@
 // Offline test backend: one shop kept in this browser (IndexedDB). Open the program with ?local=1 to use it.
 // Same functions as backend-cloud.js so the screens don't care which one is running.
 import { getData, saveData, getSettings, saveSettings as storeSettings } from './store.js';
-import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill } from './shop.js';
+import { DEFAULT_SETTINGS, createSale, receivePayment, editBill, cancelBill, changeBillRate, makeTransfer, editTransfer, cancelTransfer, shopSnapshot, docNo, newPin, hashPin, todayIso } from './shop.js';
 
 export const mode = 'local';
 let testName = null; try { testName = localStorage.getItem('localUserName'); } catch { /* ignore */ }
@@ -24,6 +24,8 @@ export async function openShop(shopId, onChange) {
   data = await getData();
   data.receipts ||= [];
   data.requests ||= [];
+  data.transfers ||= [];
+  data.stockLogs ||= [];
   const settings = await getSettings(DEFAULT_SETTINGS);
   return { data, settings, onChange };
 }
@@ -77,7 +79,8 @@ function applyStock(stock) {
 }
 export async function commitBillChange(shopId, billNo, kind, changes, meta) {
   const i = data.bills.findIndex((b) => b.no === billNo);
-  const res = kind === 'cancel' ? cancelBill(data.products, data.bills[i], meta) : editBill(data.products, data.bills[i], changes, meta);
+  const cur = data.bills[i];
+  const res = kind === 'cancel' ? cancelBill(data.products, cur, meta) : kind === 'rate' ? { bill: changeBillRate(cur, changes.rate, meta), stock: new Map() } : editBill(data.products, cur, changes, meta);
   data.bills[i] = res.bill; applyStock(res.stock);
   await saveData(data);
   return res.bill;
@@ -101,21 +104,55 @@ export async function exportShop() {
   const { id, ...s } = settings;
   const asDocs = (arr, key) => (arr || []).map((x) => ({ id: x[key] ?? x.id, data: x }));
   return { format: 'nutdechashop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: USER.name, shopId: 'local', settings: s,
-    collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [] } };
+    collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [], transfers: asDocs(d.transfers, 'no'), stockLogs: asDocs(d.stockLogs, 'at') } };
 }
 export async function restoreShop(shopId, backup, onProgress) {
   const c = backup.collections || {};
   const vals = (k) => (c[k] || []).map((x) => x.data);
-  data = { customers: vals('customers'), products: vals('products'), bills: vals('bills'), receipts: vals('receipts'), requests: vals('requests') };
+  data = { customers: vals('customers'), products: vals('products'), bills: vals('bills'), receipts: vals('receipts'), requests: vals('requests'), transfers: vals('transfers'), stockLogs: vals('stockLogs') };
   await saveData(data);
   const { lastBackupAt, ...s } = backup.settings || {};
   await storeSettings({ ...(await getSettings(DEFAULT_SETTINGS)), ...s });
   onProgress?.(1);
 }
 export async function deleteShop(shopId, onProgress) {
-  data = { customers: [], products: [], bills: [], receipts: [], requests: [] };
+  data = { customers: [], products: [], bills: [], receipts: [], requests: [], transfers: [], stockLogs: [] };
   await saveData(data); onProgress?.(1);
 }
 export async function markBackup() {
   await storeSettings({ ...(await getSettings(DEFAULT_SETTINGS)), lastBackupAt: new Date().toISOString(), lastBackupBy: USER.name });
 }
+
+// ---------- stock / PIN / overview ----------
+export async function commitTransfer(shopId, settings, input) {
+  const date = input.date || todayIso();
+  const no = docNo(settings.prefix, 'TR', date, data.transfers.map((t) => t.no));
+  const { transfer, stock } = makeTransfer(data.products, { ...input, date }, no);
+  data.transfers.push(transfer); applyStock(stock); await saveData(data); return transfer;
+}
+export async function changeTransfer(shopId, no, kind, changes, meta = {}) {
+  const i = data.transfers.findIndex((t) => t.no === no);
+  const res = kind === 'cancel' ? cancelTransfer(data.products, data.transfers[i], meta) : editTransfer(data.products, data.transfers[i], changes, meta);
+  data.transfers[i] = res.transfer; applyStock(res.stock); await saveData(data); return res.transfer;
+}
+export async function findTransfers() { return data.transfers; }
+export async function adjustStock(shopId, code, counted, reason) {
+  const p = data.products.find((x) => x.code === code);
+  data.stockLogs.push({ code, name: p.name, from: p.stock || 0, to: Number(counted), reason: reason || '', by: USER.name, at: new Date().toISOString() });
+  p.stock = Number(counted); await saveData(data); return p.stock;
+}
+export async function stockLogs(shopId, code) { return data.stockLogs.filter((l) => l.code === code).sort((a, b) => (a.at < b.at ? 1 : -1)); }
+export async function issueCostPin(shopId, requestId) {
+  const r = data.requests.find((x) => x.id === requestId);
+  const pin = newPin(), salt = newPin() + Date.now();
+  Object.assign(r, { status: 'approved', pinHash: await hashPin(pin, salt), salt, issuedBy: USER.name, issuedAt: new Date().toISOString() });
+  await saveData(data); return pin;
+}
+export async function useCostPin(shopId, pin) {
+  for (const r of data.requests) {
+    if (r.kind !== 'costPin' || r.status !== 'approved') continue;
+    if (await hashPin(String(pin).trim(), r.salt) === r.pinHash) { r.status = 'used'; await saveData(data); return true; }
+  }
+  return false;
+}
+export async function shopOverview() { return shopSnapshot(data || await getData(), todayIso()); }
