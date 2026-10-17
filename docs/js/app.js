@@ -269,8 +269,8 @@ function openDialog(html, onSubmit) {
 }
 
 // ---------------- sale ----------------
-const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0 };
-function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0 }); }
+const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0, received: 0 };
+function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0, received: 0 }); }
 
 const liveProducts = () => data.products.filter((p) => !p.deleted);
 function searchProducts(q) {
@@ -317,6 +317,11 @@ function viewSale() {
         <div class="total-box"><span>รวม</span><span class="mono" id="sub"></span></div>
         <div class="total-box big"><span>สุทธิ</span><span class="mono" id="net"></span></div>
       </div>
+      ${cart.type === 'cash' ? `<div class="cash-box">
+        <label class="field">รับเงินมา (บาท)<input type="number" id="recv" min="0" step="0.01" inputmode="decimal" value="${cart.received || ''}" placeholder="ใส่เงินที่ลูกค้าให้" autocomplete="off"></label>
+        <div class="quick" id="quick"></div>
+        <div class="change" id="change"></div>
+      </div>` : ''}
       ${cart.type === 'credit' ? `<div class="grace-box">
         <label class="row" style="font-weight:600;min-height:44px;gap:8px"><input type="checkbox" id="grace" ${cart.grace ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ปลอดดอก</label>
         <select id="graceMonths" aria-label="ปลอดดอกกี่เดือน" ${cart.grace ? '' : 'disabled'}>${GRACE_MONTHS.map((m) => `<option value="${m}" ${m === cart.graceMonths ? 'selected' : ''}>${m} เดือน</option>`).join('')}</select>
@@ -379,10 +384,21 @@ function viewSale() {
     const sub = round2(cart.lines.reduce((s, l) => s + l.qty * l.price, 0));
     const net = round2(sub - (Number(cart.discount) || 0));
     $('#sub').textContent = money(sub); $('#net').textContent = money(net);
+    if (cart.type === 'cash') drawCash(net);
     if (cart.type === 'credit') {
       const perDay = round2(net * cart.rate / 100 / 30);
       $('#interestHint').textContent = cart.rate ? `ดอกเบี้ยวันละ ฿${money(perDay)} (30 วัน = ฿${money(net * cart.rate / 100)})${cart.grace ? ` · ปลอดดอก ${cart.graceMonths} เดือน เริ่มคิดหลัง ${cart.graceMonths * 30} วัน` : ''}` : 'ไม่คิดดอกเบี้ย';
     }
+  }
+  // Cash: money the customer hands over → change. Quick buttons for exact / common round-ups.
+  function drawCash(net) {
+    const ups = [...new Set([20, 50, 100, 500, 1000].map((m) => Math.ceil(net / m) * m))].filter((v) => v > net).slice(0, 3);
+    if (net >= 500 && !ups.includes(1000) && net < 1000) ups.push(1000);
+    $('#quick').innerHTML = net > 0 ? [['พอดี', net], ...ups.map((v) => [v.toLocaleString(), v])].map(([t, v]) => `<button type="button" class="btn small" data-recv="${v}" aria-pressed="${cart.received === v}">${t}</button>`).join('') : '';
+    const r = Number(cart.received) || 0, ch = $('#change');
+    if (!r || !(net > 0)) { ch.className = 'change'; ch.innerHTML = ''; return; }
+    if (r < net) { ch.className = 'change short'; ch.innerHTML = `<span>ยังขาด</span><b class="mono">${money(net - r)}</b>`; }
+    else { ch.className = 'change ok'; ch.innerHTML = `<span>เงินทอน</span><b class="mono">${money(r - net)}</b>`; }
   }
   $('#lines').addEventListener('input', (e) => {
     const t = e.target; if (!t.dataset.f) return;
@@ -416,9 +432,15 @@ function viewSale() {
   $('#grace')?.addEventListener('change', (e) => { cart.grace = e.target.checked; $('#graceMonths').disabled = !cart.grace; drawTotals(); });
   $('#graceMonths')?.addEventListener('change', (e) => { cart.graceMonths = Number(e.target.value); drawTotals(); });
   $('#disc').addEventListener('input', (e) => { cart.discount = Number(e.target.value) || 0; drawTotals(); });
+  $('#recv')?.addEventListener('input', (e) => { cart.received = Number(e.target.value) || 0; $('#saleErr').classList.add('hidden'); drawTotals(); });
+  $('#recv')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#save').click(); } });
+  $('#quick')?.addEventListener('click', (e) => { const b = e.target.closest('[data-recv]'); if (!b) return; cart.received = Number(b.dataset.recv); $('#recv').value = cart.received; $('#saleErr').classList.add('hidden'); drawTotals(); });
   $('#clear').addEventListener('click', () => { resetCart(); viewSale(); });
   $('#save').addEventListener('click', async () => {
     const err = $('#saleErr'); err.classList.add('hidden');
+    const netNow = round2(cart.lines.reduce((s2, l) => s2 + l.qty * l.price, 0) - (Number(cart.discount) || 0));
+    if (cart.type === 'cash' && cart.received && cart.received < netNow) { err.textContent = `รับเงินมายังไม่พอ ขาดอีก ฿${money(netNow - cart.received)}`; err.classList.remove('hidden'); $('#recv').focus(); return; }
+    const recv = cart.type === 'cash' && cart.received ? cart.received : 0;
     const btn = $('#save'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> กำลังบันทึก…';
     let bill;
     try {
@@ -428,6 +450,7 @@ function viewSale() {
     openDialog(`<h2>บันทึกการขายแล้ว</h2>
       <div>เลขที่ <b class="mono">${esc(bill.no)}</b> · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · <b>฿${money(bill.total)}</b></div>
       <div class="muted">${esc(custLabel(bill.customerCode))}</div>
+      ${recv ? `<div class="change ok big"><span>รับ ${money(recv)} · ทอน</span><b class="mono">${money(recv - bill.total)}</b></div>` : ''}
       <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
   });
   drawLines();
@@ -1052,7 +1075,7 @@ function viewBank() {
   };
   const bankHtml = (r) => `<div class="bank">
       <div class="p-head"><div><div class="p-shop">${esc(settings.name || '')}</div><div>${esc([settings.address, settings.phone ? 'โทร ' + settings.phone : ''].filter(Boolean).join(' · '))}</div></div>
-        <div class="p-right"><div class="p-title">รายชื่อลูกหนี้</div><div>ณ วันที่ ${dd(asOf)}</div><div>${$('#withInt').checked ? 'ยอดรวมเงินต้นและดอกเบี้ย' : 'ยอดเงินต้น'}</div></div></div>
+        <div class="p-right"><div class="p-title">รายชื่อลูกหนี้</div><div>ณ วันที่ ${dd(asOf)}</div>${$('#withInt').checked ? '' : '<div>เฉพาะเงินต้น</div>'}</div></div>
       ${r.groups.map((g) => `<table class="p-table bank-t"><thead><tr><th colspan="3">หมู่บ้าน ${esc(g.zone)}</th></tr><tr><th class="c" style="width:12mm">ลำดับ</th><th>ชื่อลูกค้า</th><th class="r" style="width:40mm">จำนวนเงิน (บาท)</th></tr></thead>
         <tbody>${g.rows.map((x, i) => `<tr><td class="c">${i + 1}</td><td>${esc(x.name)}</td><td class="r">${money(amount(x))}</td></tr>`).join('')}
         <tr class="p-foot"><td colspan="2" class="r">รวมหมู่บ้าน ${esc(g.zone)} (${g.rows.length} ราย)</td><td class="r">${money(g.sum)}</td></tr></tbody></table>`).join('')}
