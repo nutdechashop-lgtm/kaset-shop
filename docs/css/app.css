@@ -128,3 +128,5 @@ td.mono, td .mono, td .btn.link { white-space: nowrap; }
 .hdr-select option { color: #1C1F1A; }
 .preview-bar { background: var(--orange-soft); color: var(--note-ink); border-bottom: 1px solid var(--note-line); font-size: 14px; }
 input:disabled, textarea:disabled, select:disabled { opacity: .75; cursor: not-allowed; }
+.grace-box { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--btn-line); border-radius: 12px; padding: 6px 10px 6px 12px; background: var(--stat-bg); }
+.grace-box select { min-height: 42px; }

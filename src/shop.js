@@ -46,7 +46,7 @@ export function nextCustomerCode(customers) {
 }
 
 export function nextProductCode(products) {
-  let max = 0;
+  let max = 0; // counts deleted products too, so a code is never reused
   for (const p of products) { const n = parseInt(p.code, 10); if (Number.isFinite(n) && n > max) max = n; }
   return String(max + 1).padStart(6, '0');
 }

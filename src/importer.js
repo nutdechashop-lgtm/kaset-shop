@@ -140,6 +140,13 @@ export function importDatabase(bytes, opts = {}) {
   }
   bills.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.no < b.no ? -1 : 1));
 
+  // The old program also kept expense/income entries in the product table (ค่าน้ำ, ค่าไฟ, ดอกเบี้ยรับ …).
+  // Drop those that were never sold; anything that appears on a sales bill (e.g. ค่าจัดการแปลงนา-ไร่) stays.
+  const soldCodes = new Set([...lines.values()].flat().map((l) => l.code));
+  const isExpense = (p) => /^(ค่า|ดอกเบี้ย)/.test(p.name.trim()) && !soldCodes.has(p.code);
+  const removedNonProducts = products.filter(isExpense).map((p) => p.name);
+  for (let i = products.length - 1; i >= 0; i--) if (isExpense(products[i])) { prodByCode.delete(products[i].code); products.splice(i, 1); }
+
   // Products with no price in the old file: use the last price they were sold at.
   // (looks at every bill in the file, not only the imported year range)
   const lastPrice = new Map();
@@ -156,7 +163,8 @@ export function importDatabase(bytes, opts = {}) {
   const unknownCus = new Set(bills.filter((b) => b.customerCode && !known.has(b.customerCode)).map((b) => b.customerCode));
   if (unknownCus.size) warnings.push(`บิลอ้างถึงลูกค้าที่ไม่มีในรายชื่อ ${unknownCus.size} รหัส`);
   const noPrice = products.filter((p) => !p.price).length;
-  if (noPrice) warnings.push(`สินค้า ${noPrice} รายการยังไม่มีราคาขาย (ไม่เคยขาย)`);
+  if (noPrice) warnings.push(`สินค้า ${noPrice} รายการยังไม่มีราคาขาย (ไม่เคยขาย) · ใส่ราคาได้ที่เมนูสินค้า ตัวกรอง "ยังไม่มีราคา"`);
+  if (removedNonProducts.length) warnings.push(`ตัดรายการที่ไม่ใช่สินค้าออก ${removedNonProducts.length} รายการ: ${removedNonProducts.join(', ')}`);
 
   const openBills = bills.filter((b) => b.status === 'open');
   const summary = {
@@ -167,7 +175,7 @@ export function importDatabase(bytes, opts = {}) {
     cancelledBills: bills.filter((b) => b.status === 'cancelled').length,
     openBills: openBills.length, openPrincipal: round2(openBills.reduce((s, b) => s + b.total, 0)),
     openCustomers: new Set(openBills.map((b) => b.customerCode)).size,
-    receipts: receipts.length, warnings,
+    receipts: receipts.length, removedNonProducts, warnings,
   };
   return { shop, customers, products, bills, receipts, summary };
 }

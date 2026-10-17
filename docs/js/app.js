@@ -217,9 +217,10 @@ function openDialog(html, onSubmit) {
 const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0 };
 function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0 }); }
 
+const liveProducts = () => data.products.filter((p) => !p.deleted);
 function searchProducts(q) {
   const n = norm(q); if (!n) return [];
-  return data.products.filter((p) => norm(p.name).includes(n) || p.code.startsWith(q.trim())).slice(0, 30);
+  return liveProducts().filter((p) => norm(p.name).includes(n) || p.code.startsWith(q.trim())).slice(0, 30);
 }
 function searchCustomers(q) {
   const n = norm(q); if (!n) return [];
@@ -229,7 +230,7 @@ function searchCustomers(q) {
 function viewSale() {
   const today = daySummary(data, todayIso());
   view.innerHTML = `
-  ${!data.products.length ? `<div class="note">ยังไม่มีสินค้าในร้านนี้ · ${isManager() ? '<a href="#import">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือ' : ''} เพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
+  ${!liveProducts().length ? `<div class="note">ยังไม่มีสินค้าในร้านนี้ · ${isManager() ? '<a href="#import">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือ' : ''} เพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
   <div class="grid-sale">
     <section class="card">
       <label class="field">ค้นหาสินค้า (พิมพ์ชื่อ แล้วกด Enter เพื่อเพิ่ม)
@@ -254,10 +255,6 @@ function viewSale() {
         <label class="field">ดอกเบี้ย (% ต่อ 30 วัน คิดรายวัน)
           <select id="rate">${RATES.map((r) => `<option value="${r}" ${r === cart.rate ? 'selected' : ''}>${r}%</option>`).join('')}</select>
         </label>
-        <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" id="grace" ${cart.grace ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> บิลงานขาย (ปลอดดอก)</label>
-        <label class="field ${cart.grace ? '' : 'hidden'}" id="graceWrap">ปลอดดอกกี่เดือน (เดือนละ 30 วัน)
-          <select id="graceMonths">${GRACE_MONTHS.map((m) => `<option value="${m}" ${m === cart.graceMonths ? 'selected' : ''}>${m} เดือน</option>`).join('')}</select>
-        </label>
         <div class="muted" id="interestHint" style="font-size:14px"></div>
       </div>
       <label class="field">ส่วนลด (บาท)<input type="number" id="disc" min="0" step="0.01" value="${cart.discount || ''}" placeholder="0"></label>
@@ -265,6 +262,10 @@ function viewSale() {
         <div class="total-box"><span>รวม</span><span class="mono" id="sub"></span></div>
         <div class="total-box big"><span>สุทธิ</span><span class="mono" id="net"></span></div>
       </div>
+      ${cart.type === 'credit' ? `<div class="grace-box">
+        <label class="row" style="font-weight:600;min-height:44px;gap:8px"><input type="checkbox" id="grace" ${cart.grace ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ปลอดดอก</label>
+        <select id="graceMonths" aria-label="ปลอดดอกกี่เดือน" ${cart.grace ? '' : 'disabled'}>${GRACE_MONTHS.map((m) => `<option value="${m}" ${m === cart.graceMonths ? 'selected' : ''}>${m} เดือน</option>`).join('')}</select>
+      </div>` : ''}
       <div class="err hidden" id="saleErr"></div>
       <button class="btn primary" id="save" style="justify-content:center">บันทึกการขาย</button>
       <button class="btn" id="clear" style="justify-content:center">ล้างรายการ</button>
@@ -325,7 +326,7 @@ function viewSale() {
     $('#sub').textContent = money(sub); $('#net').textContent = money(net);
     if (cart.type === 'credit') {
       const perDay = round2(net * cart.rate / 100 / 30);
-      $('#interestHint').textContent = cart.rate ? `ดอกเบี้ยวันละ ฿${money(perDay)} (30 วัน = ฿${money(net * cart.rate / 100)})${cart.grace ? ` · เริ่มคิดหลัง ${cart.graceMonths * 30} วัน` : ''}` : 'ไม่คิดดอกเบี้ย';
+      $('#interestHint').textContent = cart.rate ? `ดอกเบี้ยวันละ ฿${money(perDay)} (30 วัน = ฿${money(net * cart.rate / 100)})${cart.grace ? ` · ปลอดดอก ${cart.graceMonths} เดือน เริ่มคิดหลัง ${cart.graceMonths * 30} วัน` : ''}` : 'ไม่คิดดอกเบี้ย';
     }
   }
   $('#lines').addEventListener('input', (e) => {
@@ -357,7 +358,7 @@ function viewSale() {
 
   $$('[data-type]').forEach((b) => b.addEventListener('click', () => { cart.type = b.dataset.type; viewSale(); }));
   $('#rate')?.addEventListener('change', (e) => { cart.rate = Number(e.target.value); drawTotals(); });
-  $('#grace')?.addEventListener('change', (e) => { cart.grace = e.target.checked; $('#graceWrap').classList.toggle('hidden', !cart.grace); drawTotals(); });
+  $('#grace')?.addEventListener('change', (e) => { cart.grace = e.target.checked; $('#graceMonths').disabled = !cart.grace; drawTotals(); });
   $('#graceMonths')?.addEventListener('change', (e) => { cart.graceMonths = Number(e.target.value); drawTotals(); });
   $('#disc').addEventListener('input', (e) => { cart.discount = Number(e.target.value) || 0; drawTotals(); });
   $('#clear').addEventListener('click', () => { resetCart(); viewSale(); });
@@ -627,37 +628,46 @@ function productForm(p) {
       <label class="field">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
     </div>
     <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" name="noStock" ${p.noStock ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ไม่มีสต๊อก (งานบริการ เช่น ไถแปร โดรนพ่นยา)</label>
-    <div class="muted" style="font-size:13px">ราคาทุน: ต้องขอรหัสจากแอดมิน (เปิดใช้รอบถัดไป)</div>
+    ${isManager() ? `<label class="field">ราคาทุน (บาท) <span class="muted" style="font-weight:400">· พนักงานมองไม่เห็นช่องนี้</span><input type="number" name="cost" min="0" step="0.01" value="${p.cost || ''}"></label>`
+      : '<div class="muted" style="font-size:13px">ราคาทุน: ต้องขอรหัส PIN จากแอดมินก่อนดูหรือแก้</div>'}
     <div class="err hidden dlg-err"></div>
-    <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+    <div class="row" style="justify-content:space-between"><span class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></span>
+      ${isNew ? '' : '<button class="btn" value="delete" formnovalidate style="color:var(--red)">ลบสินค้า</button>'}</div>`, async (f, action) => {
+    if (action === 'delete') {
+      if (!confirm(`ลบ "${p.name}" ออกจากรายการสินค้า?\nบิลเก่าที่เคยขายสินค้านี้ยังอยู่ครบ`)) return false;
+      await backend.saveProduct(shopId, { code: p.code, deleted: true, deletedBy: user.name, deletedAt: new Date().toISOString() });
+      toast('ลบสินค้าแล้ว'); viewProducts(); return;
+    }
     const v = Object.fromEntries(new FormData(f));
     if (!v.name.trim()) throw new Error('ใส่ชื่อสินค้า');
     const code = v.code.trim();
     if (!/^[^/]+$/.test(code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
-    if (isNew && data.products.some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
-    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, noStock: !!v.noStock, priceFromHistory: false };
-    if (isNew) Object.assign(rec, { cost: 0, group: '' });
+    if (isNew && liveProducts().some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
+    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
+    if (isManager()) rec.cost = round2(Number(v.cost) || 0);
+    else if (isNew) rec.cost = 0;
+    if (isNew) rec.group = '';
     await backend.saveProduct(shopId, rec);
     toast('บันทึกสินค้าแล้ว'); viewProducts();
   });
 }
 function viewProducts() {
   view.innerHTML = `<section class="card">
-    <div class="row" style="justify-content:space-between"><h2>สินค้า (${data.products.length})</h2><button class="btn primary" id="addp">+ เพิ่มสินค้า</button></div>
+    <div class="row" style="justify-content:space-between"><h2>สินค้า (${liveProducts().length})</h2><button class="btn primary" id="addp">+ เพิ่มสินค้า</button></div>
     <div class="row"><input type="search" id="pq2" placeholder="ค้นหาชื่อสินค้า" style="flex:1;min-width:220px" autocomplete="off">
       <select id="pf"><option value="">ทั้งหมด</option><option value="neg">สต๊อกติดลบ</option><option value="noprice">ยังไม่มีราคา</option><option value="service">ไม่มีสต๊อก (บริการ)</option></select></div>
     <div class="scroll"><table id="ptab"></table></div>
   </section>`;
   const draw = () => {
     const n = norm($('#pq2').value), f = $('#pf').value;
-    const list = data.products.filter((p) => (!n || norm(p.name).includes(n) || p.code.startsWith($('#pq2').value.trim()))
+    const list = liveProducts().filter((p) => (!n || norm(p.name).includes(n) || p.code.startsWith($('#pq2').value.trim()))
       && (!f || (f === 'neg' ? !p.noStock && p.stock < 0 : f === 'noprice' ? !p.price : p.noStock))).sort((a, b) => a.name.localeCompare(b.name, 'th'));
     $('#ptab').innerHTML = `<tr><th>รหัส</th><th>ชื่อ</th><th>หน่วย</th><th class="num">ราคาขาย</th><th class="num">คงเหลือ</th><th></th></tr>`
       + (list.length ? list.slice(0, 300).map((p) => `<tr><td class="mono">${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td class="num">${p.price ? money(p.price) : '<span class="pill credit">ไม่มีราคา</span>'}</td><td class="num">${p.noStock ? '<span class="muted">ไม่มีสต๊อก</span>' : `<span style="${p.stock < 0 ? 'color:var(--red);font-weight:600' : ''}">${qtyFmt(p.stock)}</span>`}</td><td><button class="btn small" data-e="${esc(p.code)}">แก้ไข</button></td></tr>`).join('')
         : '<tr><td colspan="6" class="empty">ไม่พบสินค้า</td></tr>');
   };
   $('#pq2').addEventListener('input', draw); $('#pf').addEventListener('change', draw);
-  $('#ptab').addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) productForm(data.products.find((p) => p.code === b.dataset.e)); });
+  $('#ptab').addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) productForm(liveProducts().find((p) => p.code === b.dataset.e)); });
   $('#addp').addEventListener('click', () => productForm());
   draw(); $('#pq2').focus();
 }
@@ -846,7 +856,7 @@ function viewSettings() {
     <h2>ข้อมูลร้านนี้</h2>
     <div class="stats">
       <div class="stat"><div class="k">ลูกค้า</div><div class="v">${data.customers.length}</div></div>
-      <div class="stat"><div class="k">สินค้า</div><div class="v">${data.products.length}</div></div>
+      <div class="stat"><div class="k">สินค้า</div><div class="v">${liveProducts().length}</div></div>
       <div class="stat"><div class="k">บิลค้าง</div><div class="v">${data.bills.filter((b) => b.status === 'open').length}</div></div>
     </div>
     ${backend.mode === 'local' ? '<div class="note">โหมดทดสอบ: ข้อมูลเก็บในเบราว์เซอร์ของเครื่องนี้เท่านั้น</div>' : ''}

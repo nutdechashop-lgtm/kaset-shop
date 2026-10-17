@@ -13,7 +13,10 @@ console.log('summary (all years):', all.summary);
 
 // Known facts from the real shop data
 assert.equal(all.summary.customers, 214);
-assert.equal(all.summary.products, 406);
+assert.equal(all.summary.products, 396); // 406 minus 10 expense entries
+assert.equal(all.summary.removedNonProducts.length, 10);
+assert.ok(all.products.some((p) => p.name.startsWith('ค่าจัดการแปลงนา')), 'service that was sold stays');
+assert.ok(!all.products.some((p) => p.name === 'ค่าไฟ'));
 assert.equal(all.summary.openBills, 391);
 assert.equal(all.summary.openPrincipal, 1670876);
 const b = all.bills.find((x) => x.no === '01-BS6910150003');
