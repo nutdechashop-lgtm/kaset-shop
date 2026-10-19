@@ -193,21 +193,29 @@ async function enterShop(id) {
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
 // ---------------- printing (same layout as the old program's bills: A5 landscape, A4 when long) ----------------
-// A5 bills print on an upright (portrait) A5 sheet with the bill turned sideways, unless this computer's
-// printer was set to take A5 landscape directly. Remembered per computer.
-const rotateA5 = () => lsGet('printA5Mode') !== 'landscape';
-function doPrint(html, a4) {
+// Always an A4 portrait page (no printer settings to change). A bill that fits goes in the top half
+// (prints on half an A4 or an A5 put in sideways); a bill too long for that uses the whole A4.
+function doPrint(html, forceA4) {
   const area = $('#printArea');
-  const rot = !a4 && rotateA5();
-  area.className = a4 ? 'a4' : rot ? 'rot' : '';
-  area.innerHTML = rot ? `<div class="rot-wrap">${html}</div>` : html;
+  area.className = ''; area.innerHTML = html;
   // The bill font loads only when first used; printing before it arrives gives blank text.
-  const fontsReady = Promise.all(['12px Sarabun', 'bold 12px Sarabun'].map((f) => document.fonts?.load(f, 'ใบเสร็จ ABC 0123456789').catch(() => null)))
+  const fontsReady = Promise.all(['15px Sarabun', 'bold 15px Sarabun'].map((f) => document.fonts?.load(f, 'ใบเสร็จ ABC 0123456789').catch(() => null)))
     .then(() => document.fonts?.ready);
-  Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => setTimeout(() => window.print(), 80));
+  Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => {
+    area.className = forceA4 || !fitsHalf(area) ? 'a4' : '';
+    setTimeout(() => window.print(), 80);
+  });
 }
-const printModeField = () => `<label class="row muted" style="font-size:13px;gap:6px;min-height:32px">ใส่กระดาษ A5 แบบ <select data-a5mode style="min-height:34px;font-size:13px"><option value="rotate" ${rotateA5() ? 'selected' : ''}>แนวตั้ง (ด้านสั้นเข้าเครื่อง)</option><option value="landscape" ${rotateA5() ? '' : 'selected'}>แนวนอน (ด้านยาวเข้าเครื่อง)</option></select></label>`;
-document.addEventListener('change', (e) => { if (e.target.matches?.('[data-a5mode]')) lsSet('printA5Mode', e.target.value); });
+// Lay the bill out off-screen at its natural height and check it fits in the top half of the page.
+function fitsHalf(area) {
+  const paper = $('.paper', area); if (!paper) return true;
+  const keep = area.style.cssText;
+  area.style.cssText = 'display:block;position:absolute;left:-10000px;top:0;visibility:hidden';
+  paper.style.height = 'auto';
+  const mm = paper.getBoundingClientRect().height * 25.4 / 96;
+  paper.style.height = ''; area.style.cssText = keep;
+  return mm <= 135;
+}
 const dt = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + 543} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const dd = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${+y + 543}`; };
 function paperHead(title, right) {
@@ -241,7 +249,7 @@ function printBill(bill) {
     </div>
     <div class="p-sign four"><div>ผู้รับสินค้า</div><div>ผู้ส่งสินค้า</div><div>ผู้อนุมัติ</div><div>ผู้ออกบิล</div></div>
   </div>`;
-  doPrint(html, bill.lines.length > 8);
+  doPrint(html);
 }
 function printReceipt(r) {
   // Receipts made before the program stored the owed amounts fall back to the paid amounts.
@@ -264,7 +272,7 @@ function printReceipt(r) {
     </div>
     <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>
   </div>`;
-  doPrint(html, rows.length > 8);
+  doPrint(html);
 }
 
 function openDialog(html, onSubmit) {
@@ -466,7 +474,7 @@ function viewSale() {
       <div>เลขที่ <b class="mono">${esc(bill.no)}</b> · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · <b>฿${money(bill.total)}</b></div>
       <div class="muted">${esc(custLabel(bill.customerCode))}</div>
       ${recv ? `<div class="change ok big"><span>รับ ${money(recv)} · ทอน</span><b class="mono">${money(recv - bill.total)}</b></div>` : ''}
-      ${printModeField()}<div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
+      <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
   });
   drawLines();
   pq.focus();
@@ -598,7 +606,7 @@ function viewDebtor(code) {
       <div>ใบเสร็จ <b class="mono">${esc(r.no)}</b></div>
       <div>เงินต้น ${money(r.totalPrincipal)} + ดอกเบี้ย ${money(r.totalInterest)} = <b>฿${money(r.total)}</b></div>
       ${r.change > 0 ? `<div class="note">เงินทอน ฿${money(r.change)}</div>` : ''}
-      ${printModeField()}<div class="row"><button class="btn primary" value="print">พิมพ์ใบเสร็จ</button><button class="btn" value="cancel">ปิด</button></div>`, () => { printReceipt(r); });
+      <div class="row"><button class="btn primary" value="print">พิมพ์ใบเสร็จ</button><button class="btn" value="cancel">ปิด</button></div>`, () => { printReceipt(r); });
   });
 }
 
@@ -620,7 +628,7 @@ function showBill(b) {
     ${b.status === 'cancelled' ? `<div class="err">ยกเลิกโดย ${esc(b.cancelledBy || '')}${b.cancelReason ? ' · ' + esc(b.cancelReason) : ''}</div>` : ''}
     ${pend ? '<div class="note">มีคำขอแก้ไข/ยกเลิกบิลนี้รอเจ้าของอนุมัติอยู่</div>' : ''}
     ${lock && b.status !== 'cancelled' ? `<div class="muted" style="font-size:13px">${esc(lock)}</div>` : ''}
-    ${printModeField()}
+    
     <div class="row" style="justify-content:space-between">
       <span class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ปิด</button></span>
       ${!lock && !pend ? `<span class="row">${isManager()

@@ -91,38 +91,34 @@ dialog h2 { margin: 0; font-size: 19px; }
 @media (max-width: 560px) { .form-grid { grid-template-columns: 1fr; } }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--strong); color: var(--on-accent); padding: 12px 18px; border-radius: 12px; font-weight: 600; z-index: 50; max-width: calc(100vw - 32px); }
 
-/* ---------- printing (bills A5 landscape, A4 when long) ---------- */
+/* ---------- printing ----------
+   Like the old program: the page is ALWAYS A4 portrait, so no printer setting ever changes.
+   A normal bill fills only the top half of the page (148 mm), so it prints the same on
+   half an A4 sheet or on an A5 sheet put in sideways; a long bill uses the whole A4.
+   Page margins are 0 so the browser never adds its own header/footer. */
 #printArea { display: none; }
-/* Page margins are 0 so the browser never prints its own header/footer (title, page number);
-   the white border is padding inside the page instead. */
-@page { size: A5 landscape; margin: 0; }
-@page a4 { size: A4 portrait; margin: 0; }
-@page a5rot { size: 148mm 210mm; margin: 0; }
+@page { size: A4 portrait; margin: 0; }
 @media print {
   body > *:not(#printArea) { display: none !important; }
   html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
-  #printArea { display: block; box-sizing: border-box; padding: 7mm 8mm; }
-  #printArea.a4 { page: a4; padding: 10mm; }
-  /* A5 printers that feed the sheet upright: the page is portrait, the bill is turned 90° on it,
-     so it still reads landscape and nothing is cut off. */
-  #printArea.rot { page: a5rot; padding: 0; width: 148mm; height: 210mm; overflow: hidden; }
-  #printArea.rot .rot-wrap { box-sizing: border-box; width: 210mm; height: 148mm; padding: 7mm 8mm; transform-origin: 0 0; transform: translateX(148mm) rotate(90deg); }
+  #printArea { display: block; }
 }
-.paper { font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif; font-size: 12px; line-height: 1.4; color: #000; background: #fff; display: flex; flex-direction: column; gap: 2.2mm; height: 133mm; }
-#printArea.a4 .paper { height: 276mm; }
+#printArea { box-sizing: border-box; width: 210mm; padding: 8mm 9mm 0; }
+.paper { font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif; font-size: 15px; line-height: 1.35; color: #000; background: #fff; display: flex; flex-direction: column; gap: 2mm; height: 135mm; }
+#printArea.a4 .paper { height: 280mm; }
 .paper b { font-weight: 700; }
 .p-head { display: flex; justify-content: space-between; gap: 4mm; }
-.p-shop { font-size: 17px; font-weight: 700; }
+.p-shop { font-size: 21px; font-weight: 700; }
 .p-right { text-align: right; }
-.p-title { font-size: 15px; font-weight: 700; text-decoration: underline; }
+.p-title { font-size: 19px; font-weight: 700; text-decoration: underline; }
 .p-edit { display: inline-block; border: 1.5px solid #000; padding: 0 2mm; margin: .5mm 0; font-weight: 700; }
 .p-box { display: flex; border: 1px solid #000; }
 .p-cell { padding: 1.5mm 2.6mm; }
 .p-box > .p-cell:first-child { flex: 1; }
-.p-side { width: 68mm; border-left: 1px solid #000; }
+.p-side { width: 74mm; border-left: 1px solid #000; }
 .p-split { display: flex; justify-content: space-between; gap: 3mm; }
-.p-table { width: 100%; border-collapse: collapse; border: 1px solid #000; font-size: 12px; }
-.p-table th { background: none; color: #000; font-size: 12px; font-weight: 700; padding: 1mm 1.6mm; border: 1px solid #000; text-align: left; }
+.p-table { width: 100%; border-collapse: collapse; border: 1px solid #000; font-size: 15px; }
+.p-table th { background: none; color: #000; font-size: 15px; font-weight: 700; padding: 1mm 1.6mm; border: 1px solid #000; text-align: left; }
 .p-table td { padding: .8mm 1.6mm; border: 0; border-left: 1px solid #000; border-right: 1px solid #000; }
 .p-table .c { text-align: center; } .p-table .r { text-align: right; }
 .p-table th.c { text-align: center; } .p-table th.r { text-align: right; }
@@ -130,14 +126,14 @@ dialog h2 { margin: 0; font-size: 19px; }
 .p-sum .p-notes { flex: 1; display: flex; flex-direction: column; }
 .p-remark { flex: 1; min-height: 10mm; padding: 1.3mm 2.6mm; border-bottom: 1px solid #000; font-weight: 600; }
 .p-words { padding: 1.3mm 2.6mm; text-align: center; font-weight: 600; }
-.p-count { width: 19mm; border-left: 1px solid #000; text-align: center; }
-.p-totals { width: 50mm; border-left: 1px solid #000; display: flex; flex-direction: column; gap: .3mm; }
-.p-grand { font-weight: 700; font-size: 14px; }
+.p-count { width: 22mm; border-left: 1px solid #000; text-align: center; }
+.p-totals { width: 58mm; border-left: 1px solid #000; display: flex; flex-direction: column; gap: .3mm; }
+.p-grand { font-weight: 700; font-size: 18px; }
 .p-rest { font-weight: 600; border-top: 1px solid #000; margin-top: .6mm; padding-top: .6mm; }
 .p-sign { margin-top: auto; display: grid; text-align: center; }
 .p-sign.four { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4mm; }
 .p-sign.two { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20mm; padding: 0 16mm; }
-.p-sign div::before { content: ''; display: block; height: 7mm; border-bottom: 1px dotted #000; margin-bottom: .6mm; }
+.p-sign div::before { content: ''; display: block; height: 6mm; border-bottom: 1px dotted #000; margin-bottom: .6mm; }
 .topbar .wrap > * { min-width: 0; max-width: 100%; }
 .nav { min-width: 0; max-width: 100%; scrollbar-width: none; }
 .seg { align-self: flex-start; }
