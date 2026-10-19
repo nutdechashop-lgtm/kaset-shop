@@ -7,5 +7,5 @@ export {
 export {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, onSnapshot, query, where,
-  runTransaction, writeBatch, increment, serverTimestamp,
+  runTransaction, writeBatch, increment, serverTimestamp, waitForPendingWrites, orderBy, limit,
 } from 'firebase/firestore';

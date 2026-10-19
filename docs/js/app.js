@@ -54,7 +54,11 @@ function drawHeader() {
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   const nAlert = alertsOn() ? currentAlerts().count : 0;
-  $('#bell')?.remove();
+  $('#bell')?.remove(); $('#netPill')?.remove();
+  if (inShop) {
+    const pend = backend.pendingCount?.(shopId) || 0, off = navigator.onLine === false;
+    if (off || pend) $('#shopName').insertAdjacentHTML('afterend', `<span id="netPill" class="pill" style="background:${off ? 'var(--red)' : 'var(--orange)'};color:#fff;margin-left:6px" title="บิลที่ขายตอนไม่มีเน็ตเก็บไว้ในเครื่องนี้ จะส่งขึ้นระบบเองเมื่อเน็ตกลับ">${off ? 'ไม่มีอินเทอร์เน็ต · ขายได้ตามปกติ' : ''}${off && pend ? ' · ' : ''}${pend ? `รอส่งขึ้นระบบ ${pend} บิล` : ''}</span>`);
+  }
   if (typeof drawImportBadge === 'function') setTimeout(drawImportBadge, 0);
   if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
@@ -189,6 +193,7 @@ async function enterShop(id) {
   if (!settings.name && canEditSettings() && !location.hash) location.hash = 'settings';
   render();
   checkAlerts().catch(() => {});
+  backend.flushPending?.(shopId).catch(() => {});
 }
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
@@ -306,6 +311,7 @@ function searchCustomers(q) {
 }
 
 function viewSale() {
+  backend.reserveNumbers?.(shopId, settings).catch(() => {}); // so this computer can keep selling if the internet drops
   const today = daySummary(data, todayIso());
   view.innerHTML = `
   ${!liveProducts().length ? `<div class="note">ยังไม่มีสินค้าในร้านนี้ · ${isManager() ? '<a href="#import">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือ' : ''} เพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
@@ -481,6 +487,7 @@ function viewSale() {
     openDialog(`<h2>บันทึกการขายแล้ว</h2>
       <div>เลขที่ <b class="mono">${esc(bill.no)}</b> · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · <b>฿${money(bill.total)}</b></div>
       <div class="muted">${esc(custLabel(bill.customerCode))}</div>
+      ${bill.pending ? '<div class="note" style="font-size:14px">ตอนนี้ไม่มีอินเทอร์เน็ต · บิลนี้<b>เก็บไว้ในเครื่องนี้แล้ว</b> พิมพ์ให้ลูกค้าได้เลย ระบบจะส่งขึ้นเองเมื่อเน็ตกลับ <b>อย่าล้างข้อมูลเบราว์เซอร์</b></div>' : ''}
       ${recv ? `<div class="change ok big"><span>รับ ${money(recv)} · ทอน</span><b class="mono">${money(recv - bill.total)}</b></div>` : ''}
       <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
   });
@@ -957,6 +964,16 @@ function alertsCard() {
     ${req.length || low.length ? `<div class="alert-feed">${[...req, ...low].slice(0, 8).map((a) => `<a href="${a.url}" class="${a.key[0] === 'l' ? 'low' : 'req'}"><b>${a.title}</b><span>${esc(a.body)}</span></a>`).join('')}${req.length + low.length > 8 ? `<div class="muted" style="font-size:13px">และอีก ${req.length + low.length - 8} รายการ</div>` : ''}</div>` : '<div class="muted">ไม่มีเรื่องที่ต้องดูตอนนี้</div>'}
   </section>`;
 }
+// Internet goes / comes back: update the header and send bills that were sold offline.
+window.addEventListener('offline', () => { if (shop) drawHeader(), markNav(); });
+window.addEventListener('online', () => {
+  if (!shop) return;
+  drawHeader(); markNav();
+  backend.flushPending?.(shopId).then(() => { drawHeader(); markNav(); if (!backend.pendingCount?.(shopId)) toast('ส่งบิลที่ขายตอนไม่มีเน็ตขึ้นระบบแล้ว'); }).catch(() => {});
+  backend.reserveNumbers?.(shopId, settings).catch(() => {});
+});
+window.addEventListener('salefail', (e) => alert(`บิล ${e.detail.no} บันทึกไม่สำเร็จ: ${e.detail.msg}\nกรุณาขายบิลนี้ใหม่`));
+window.addEventListener('pendingchange', () => { if (shop) drawHeader(), markNav(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkAlerts().catch(() => {}); });
 document.addEventListener('click', async (e) => {
   if (!e.target.closest('#enableNotify')) return;

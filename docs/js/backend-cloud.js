@@ -169,9 +169,83 @@ export async function saveSettings(shopId, s) {
 }
 
 // Sale: bill number from a per-day counter, stock reduced with increments (safe with several devices).
+// ---------- selling, also without internet ----------
+// Each computer reserves a small block of today's bill numbers while online. Today's sales use those
+// numbers and are written as a plain batch: with internet it is saved at once; without internet it is
+// kept on this computer (and the bill can be printed) and sent automatically when the internet is back.
+// Numbers never clash between computers. Backdated bills still need internet (they use the day counter).
+const RESV_N = 15;
+const resvKey = (shopId) => 'resv:' + shopId;
+const loadResv = (shopId) => { try { return JSON.parse(localStorage.getItem(resvKey(shopId)) || 'null'); } catch { return null; } };
+const saveResv = (shopId, r) => { try { localStorage.setItem(resvKey(shopId), JSON.stringify(r)); } catch { /* ignore */ } };
+const online = () => navigator.onLine !== false;
+export async function reserveNumbers(shopId, settings) {
+  const head = docHead(settings.prefix, 'BS', todayIso());
+  const r = loadResv(shopId);
+  if (r && r.head === head && (r.to - r.next >= 3 || r.more)) return r;
+  if (!online()) return r && r.head === head ? r : null;
+  const localMax = maxRunning(head, (data?.bills || []).map((b) => b.no));
+  const res = await wrap(() => withTimeout(fb.runTransaction(db, async (tx) => {
+    const cref = sub(shopId, 'counters', head);
+    const cs = await tx.get(cref);
+    const n = Math.max(cs.exists() ? cs.data().n : 0, localMax);
+    tx.set(cref, { n: n + RESV_N });
+    return { head, next: n + 1, to: n + RESV_N };
+  }), 15000, 'จองเลขบิล'));
+  // keep unused numbers of the old block for today first
+  const keep = r && r.head === head && r.next <= r.to ? r : null;
+  const out = keep ? { head, next: keep.next, to: keep.to, more: res } : res;
+  saveResv(shopId, out);
+  return out;
+}
+function takeNumber(shopId, head) {
+  let r = loadResv(shopId);
+  if (r && r.head === head && r.next > r.to && r.more) { r = r.more; }
+  if (!r || r.head !== head || r.next > r.to) return null;
+  const no = head + String(r.next).padStart(4, '0');
+  r.next++; saveResv(shopId, r.next > r.to && r.more ? r.more : r);
+  return no;
+}
+// Sales saved on this computer but not yet confirmed by the server.
+const pendKey = (shopId) => 'pendingBills:' + shopId;
+const pendList = (shopId) => { try { return JSON.parse(localStorage.getItem(pendKey(shopId)) || '[]'); } catch { return []; } };
+const pendSave = (shopId, l) => { try { localStorage.setItem(pendKey(shopId), JSON.stringify(l)); } catch { /* ignore */ } window.dispatchEvent(new Event('pendingchange')); };
+export const pendingCount = (shopId) => pendList(shopId).length;
+// Called when the internet comes back / the shop opens: waits until everything is on the server.
+export async function flushPending(shopId) {
+  if (!pendList(shopId).length || !online()) return;
+  await fb.waitForPendingWrites(db);
+  pendSave(shopId, []);
+}
 export async function commitSale(shopId, settings, input) {
   const date = input.date || todayIso();
   const head = docHead(settings.prefix, 'BS', date);
+  if (date === todayIso()) {
+    let no = takeNumber(shopId, head);
+    if (!no && online()) { await reserveNumbers(shopId, settings); no = takeNumber(shopId, head); }
+    if (!no) throw new Error('ไม่มีอินเทอร์เน็ต และเลขบิลสำรองของเครื่องนี้หมดแล้ว ต่ออินเทอร์เน็ตก่อนแล้วลองใหม่');
+    const scratch = { customers: data.customers, products: data.products.map((p) => ({ ...p })), bills: [], receipts: [] };
+    const bill = createSale(scratch, settings, { ...input, date, by: me.name }, { no });
+    bill.byUid = me.uid;
+    const b = fb.writeBatch(db);
+    b.set(sub(shopId, 'bills', no), bill);
+    const qty = new Map();
+    for (const l of bill.lines) qty.set(l.code, (qty.get(l.code) || 0) + l.qty);
+    for (const [code, q] of qty) {
+      const p = data.products.find((x) => x.code === code);
+      if (p && !p.noStock) b.update(sub(shopId, 'products', code), { stock: fb.increment(-q) });
+    }
+    pendSave(shopId, [...pendList(shopId), no]);
+    const sent = b.commit().then(() => { pendSave(shopId, pendList(shopId).filter((x) => x !== no)); return true; });
+    sent.catch((e) => { // the server refused it (not just "no internet"): tell the person, it is not saved
+      pendSave(shopId, pendList(shopId).filter((x) => x !== no));
+      window.dispatchEvent(new CustomEvent('salefail', { detail: { no, msg: authMsg(e) } }));
+    });
+    const ok = await Promise.race([sent.catch(() => false), new Promise((r) => setTimeout(() => r(false), online() ? 6000 : 300))]);
+    if (online()) reserveNumbers(shopId, settings).catch(() => {});
+    return ok ? bill : { ...bill, pending: true };
+  }
+  needOnline('ลงบิลย้อนหลัง');
   const localMax = maxRunning(head, data.bills.map((b) => b.no));
   return wrap(() => fb.runTransaction(db, async (tx) => {
     const cref = sub(shopId, 'counters', head);
@@ -194,9 +268,9 @@ export async function commitSale(shopId, settings, input) {
     return bill;
   }));
 }
-
-// Debt payment: re-reads the customer's open bills inside the transaction so two devices can't double-apply.
+function needOnline(what) { if (!online()) throw new Error(`${what}ต้องมีอินเทอร์เน็ต · ตอนนี้ไม่มีเน็ต ขายสินค้าได้ตามปกติ ส่วนรายการนี้รอเน็ตกลับมาก่อน`); }
 export async function commitPayment(shopId, settings, input) {
+  needOnline('รับชำระหนี้');
   const date = input.date || todayIso();
   const head = docHead(settings.prefix, 'RP', date);
   const localMax = maxRunning(head, data.receipts.map((r) => r.no));
@@ -364,6 +438,7 @@ async function receiptVoidTx(tx, shopId, receiptNo, meta) {
   return () => { tx.set(rref, res.receipt); for (const b of res.bills) tx.set(sub(shopId, 'bills', b.no), b); return res.receipt; };
 }
 export async function commitReceiptVoid(shopId, receiptNo, meta) {
+  needOnline('ยกเลิกใบเสร็จ');
   const r = await wrap(() => fb.runTransaction(db, async (tx) => (await receiptVoidTx(tx, shopId, receiptNo, { ...meta, by: meta.by || me.name }))()));
   await refreshLastPaid(shopId, r.customerCode).catch(() => {});
   return r;
@@ -388,6 +463,7 @@ export async function backfillLastPaid(shopId) {
   return true;
 }
 export async function commitBillChange(shopId, billNo, kind, changes, meta) {
+  needOnline('แก้ไขบิล');
   return wrap(() => fb.runTransaction(db, async (tx) => (await billChangeTx(tx, shopId, billNo, kind, changes, { ...meta, by: meta.by || me.name }))()));
 }
 export async function createRequest(shopId, req) {
@@ -397,6 +473,7 @@ export async function createRequest(shopId, req) {
   return { id: ref.id, ...r };
 }
 export async function resolveRequest(shopId, id, approve, meta) {
+  needOnline('อนุมัติคำขอ');
   return wrap(() => fb.runTransaction(db, async (tx) => {
     const ref = sub(shopId, 'requests', id);
     const s = await tx.get(ref);
@@ -469,6 +546,7 @@ export async function markBackup(shopId) {
 
 // ---------- stock: transfers to other shops and counted adjustments ----------
 export async function commitTransfer(shopId, settings, input) {
+  needOnline('โอนสต๊อก');
   const date = input.date || todayIso();
   const head = docHead(settings.prefix, 'TR', date);
   const localMax = maxRunning(head, data.transfers.map((t) => t.no));
@@ -484,6 +562,7 @@ export async function commitTransfer(shopId, settings, input) {
   }));
 }
 export async function changeTransfer(shopId, no, kind, changes, meta = {}) {
+  needOnline('แก้ไขการโอน');
   return wrap(() => fb.runTransaction(db, async (tx) => {
     const ref = sub(shopId, 'transfers', no);
     const snap = await tx.get(ref);
@@ -501,6 +580,7 @@ export async function findTransfers(shopId) {
 }
 // Set the counted stock and keep a log line of the change.
 export async function adjustStock(shopId, code, counted, reason) {
+  needOnline('ปรับสต๊อก');
   return wrap(() => fb.runTransaction(db, async (tx) => {
     const ref = sub(shopId, 'products', code);
     const snap = await tx.get(ref);

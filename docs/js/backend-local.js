@@ -72,6 +72,9 @@ export async function replaceShopData(shopId, result, onProgress) {
   await saveData(data);
 }
 export function importJob() { return null; }
+export async function reserveNumbers() { return null; }
+export const pendingCount = () => 0;
+export async function flushPending() {}
 export async function backfillLastPaid() { return false; }
 export async function shopInfo() { const d = await getData(); return { importedAt: d.importedAt, bills: d.bills.length }; }
 
