@@ -33,8 +33,15 @@ function authMsg(e) {
   if (/email-already-in-use/.test(c)) return 'รหัสนี้มีคนใช้แล้ว';
   if (/weak-password/.test(c)) return 'PIN ต้องมี 6 หลัก';
   if (/permission-denied/.test(c)) return 'ไม่มีสิทธิ์ทำรายการนี้';
+  if (/resource-exhausted/.test(c)) return QUOTA_MSG;
   if (/unavailable|failed-precondition/.test(c)) return 'ต้องต่ออินเทอร์เน็ตเพื่อบันทึกรายการนี้';
   return e?.message || String(e);
+}
+const QUOTA_MSG = 'Firebase ไม่รับข้อมูลเพิ่ม ส่วนใหญ่เกิดจากโควตาฟรีรายวันเต็ม (อ่าน 50,000 / บันทึก 20,000 / ลบ 20,000 รายการต่อวัน) โควตาจะเริ่มใหม่ทุกวันประมาณ 14:00–15:00 น. (เวลาไทย) ข้อมูลที่บันทึกไปแล้วไม่หาย';
+// A Firestore call that never answers (quota used up, or very weak internet) would otherwise wait forever.
+function withTimeout(p, ms, what) {
+  let t; const timer = new Promise((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: รอเกิน ${Math.round(ms / 1000)} วินาทีแล้วยังไม่สำเร็จ · ${QUOTA_MSG} · หรืออินเทอร์เน็ตช้ามาก`)), ms); });
+  return Promise.race([p, timer]).finally(() => clearTimeout(t));
 }
 const wrap = async (fn) => { try { return await fn(); } catch (e) { throw new Error(authMsg(e)); } };
 
@@ -233,31 +240,60 @@ export async function findReceipts(shopId, customerCode) {
 }
 
 // Import from the old program: wipe the shop's records, then write everything in batches.
+// Import = write every record, then remove old records that are not in the new data.
+// Resumable: progress is remembered on this computer, so a stopped import continues where it left off
+// (nothing is deleted or written twice), even on another day when the free daily quota ran out.
+const jobKey = (shopId) => 'importJob:' + shopId;
+const jobSig = (r) => [r.customers.length, r.products.length, r.bills.length, (r.receipts || []).length, r.bills[0]?.no, r.bills[r.bills.length - 1]?.no, r.summary?.openPrincipal].join('|');
+const loadJob = (shopId) => { try { return JSON.parse(localStorage.getItem(jobKey(shopId)) || 'null'); } catch { return null; } };
+const saveJob = (shopId, j) => { try { j ? localStorage.setItem(jobKey(shopId), JSON.stringify(j)) : localStorage.removeItem(jobKey(shopId)); } catch { /* ignore */ } };
+export function importJob(shopId, result) {
+  const j = loadJob(shopId); if (!j) return null;
+  const total = j.writes + (j.leftovers?.length || 0);
+  return { same: result ? j.sig === jobSig(result) : null, pct: total ? (j.written + (j.deleted || 0)) / total : 0, at: j.at };
+}
 export async function replaceShopData(shopId, result, onProgress) {
   const colls = ['customers', 'products', 'bills', 'receipts', 'counters'];
-  const existing = [];
-  for (const c of colls) { const s = await wrap(() => fb.getDocs(sub(shopId, c))); existing.push(...s.docs.map((d) => d.ref)); }
   const writes = [
-    ...result.customers.map((x) => [sub(shopId, 'customers', x.code), x]),
-    ...result.products.map((x) => [sub(shopId, 'products', x.code), x]),
-    ...result.bills.map((x) => [sub(shopId, 'bills', x.no), x]),
-    ...(result.receipts || []).filter((x) => x.no && !x.no.includes('/')).map((x) => [sub(shopId, 'receipts', x.no), x]),
+    ...result.customers.map((x) => ['customers', x.code, x]),
+    ...result.products.map((x) => ['products', x.code, x]),
+    ...result.bills.map((x) => ['bills', x.no, x]),
+    ...(result.receipts || []).filter((x) => x.no && !x.no.includes('/')).map((x) => ['receipts', x.no, x]),
   ];
-  const total = existing.length + writes.length;
-  let done = 0;
-  const BATCH = 400;
-  for (let i = 0; i < existing.length; i += BATCH) {
-    const b = fb.writeBatch(db);
-    existing.slice(i, i + BATCH).forEach((r) => b.delete(r));
-    await wrap(() => b.commit()); done += Math.min(BATCH, existing.length - i); onProgress?.(done / total);
+  const sig = jobSig(result);
+  let job = loadJob(shopId);
+  if (!job || job.sig !== sig) {
+    // Fresh start: note which old records will have to go once the new ones are in.
+    const keep = new Set(writes.map(([c, id]) => c + '/' + id));
+    const leftovers = [];
+    for (const c of colls) {
+      const snap = await wrap(() => withTimeout(fb.getDocs(sub(shopId, c)), 120000, 'อ่านข้อมูลเดิมของร้าน'));
+      for (const d of snap.docs) if (!keep.has(c + '/' + d.id)) leftovers.push(c + '/' + d.id);
+    }
+    job = { sig, writes: writes.length, written: 0, leftovers, deleted: 0, at: new Date().toISOString() };
+    saveJob(shopId, job);
   }
-  for (let i = 0; i < writes.length; i += BATCH) {
+  const total = job.writes + job.leftovers.length || 1;
+  const report = () => onProgress?.((job.written + job.deleted) / total);
+  report();
+  const BATCH = 400;
+  while (job.written < writes.length) {
     const b = fb.writeBatch(db);
-    writes.slice(i, i + BATCH).forEach(([ref, x]) => b.set(ref, x));
-    await wrap(() => b.commit()); done += Math.min(BATCH, writes.length - i); onProgress?.(done / total);
+    const part = writes.slice(job.written, job.written + BATCH);
+    part.forEach(([c, id, x]) => b.set(sub(shopId, c, id), x));
+    await wrap(() => withTimeout(b.commit(), 90000, 'บันทึกข้อมูล'));
+    job.written += part.length; saveJob(shopId, job); report();
+  }
+  while (job.deleted < job.leftovers.length) {
+    const b = fb.writeBatch(db);
+    const part = job.leftovers.slice(job.deleted, job.deleted + BATCH);
+    part.forEach((path) => { const [c, id] = path.split('/'); b.delete(sub(shopId, c, id)); });
+    await wrap(() => withTimeout(b.commit(), 90000, 'ลบข้อมูลเก่า'));
+    job.deleted += part.length; saveJob(shopId, job); report();
   }
   const { warnings, ...summary } = result.summary;
-  await wrap(() => fb.setDoc(shopDoc(shopId), { importedAt: new Date().toISOString(), importSummary: summary }, { merge: true }));
+  await wrap(() => withTimeout(fb.setDoc(shopDoc(shopId), { importedAt: new Date().toISOString(), importSummary: summary }, { merge: true }), 90000, 'บันทึกสรุปการนำเข้า'));
+  saveJob(shopId, null);
 }
 export async function shopInfo(shopId) {
   const d = await wrap(() => fb.getDoc(shopDoc(shopId)));
@@ -346,7 +382,7 @@ async function commitInBatches(ops, onStep) {
   for (let i = 0; i < ops.length; i += BATCH_SIZE) {
     const b = fb.writeBatch(db);
     ops.slice(i, i + BATCH_SIZE).forEach((op) => op(b));
-    await wrap(() => b.commit());
+    await wrap(() => withTimeout(b.commit(), 90000, 'บันทึกข้อมูล'));
     onStep?.(Math.min(BATCH_SIZE, ops.length - i));
   }
 }
@@ -362,37 +398,37 @@ export async function exportShop(shopId) {
   const { createdAt, ...settings } = s.data();
   return { format: 'dreamshop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: me.name, shopId, settings, collections };
 }
-async function wipeShop(shopId, onStep) {
+async function shopRefs(shopId) {
   const refs = [];
-  for (const c of SHOP_COLLECTIONS) { const snap = await wrap(() => fb.getDocs(sub(shopId, c))); refs.push(...snap.docs.map((d) => d.ref)); }
-  await commitInBatches(refs.map((r) => (b) => b.delete(r)), onStep);
-  return refs.length;
+  for (const c of SHOP_COLLECTIONS) { const snap = await wrap(() => withTimeout(fb.getDocs(sub(shopId, c)), 120000, 'อ่านข้อมูลร้าน')); refs.push(...snap.docs.map((d) => d.ref)); }
+  return refs;
 }
 export async function restoreShop(shopId, backup, onProgress) {
   const writes = [];
   for (const c of SHOP_COLLECTIONS) for (const { id, data: d } of backup.collections[c] || []) writes.push([sub(shopId, c, id), d]);
-  let existing = 0;
-  for (const c of SHOP_COLLECTIONS) existing += (await wrap(() => fb.getDocs(sub(shopId, c)))).size;
-  const total = existing + writes.length || 1;
+  // Overwrite what the backup has, then delete only what the backup doesn't have (each record read once).
+  const keep = new Set(writes.map(([ref]) => ref.path));
+  const old = (await shopRefs(shopId)).filter((r) => !keep.has(r.path));
+  const total = old.length + writes.length || 1;
   let done = 0;
   const step = (n) => { done += n; onProgress?.(done / total); };
-  await wipeShop(shopId, step);
   await commitInBatches(writes.map(([ref, d]) => (b) => b.set(ref, d)), step);
+  await commitInBatches(old.map((r) => (b) => b.delete(r)), step);
   const { lastBackupAt, ...settings } = backup.settings || {};
   await wrap(() => fb.setDoc(shopDoc(shopId), { ...settings, restoredAt: new Date().toISOString(), restoredFrom: backup.exportedAt }, { merge: true }));
 }
 // Super-admin only: remove every record, the shop itself, and the shop from people's access.
 export async function deleteShop(shopId, onProgress) {
-  let existing = 0;
-  for (const c of SHOP_COLLECTIONS) existing += (await wrap(() => fb.getDocs(sub(shopId, c)))).size;
+  const refs = await shopRefs(shopId);
   let done = 0;
-  await wipeShop(shopId, (n) => { done += n; onProgress?.(done / (existing || 1)); });
+  await commitInBatches(refs.map((r) => (b) => b.delete(r)), (n) => { done += n; onProgress?.(done / (refs.length || 1)); });
   const users = await wrap(() => fb.getDocs(fb.query(fb.collection(db, 'users'), fb.where('shops', 'array-contains', shopId))));
   for (const u of users.docs) {
     const left = (u.data().shops || []).filter((x) => x !== shopId);
     await wrap(() => fb.updateDoc(u.ref, left.length ? { shops: left } : { shops: left, active: false }));
   }
   await wrap(() => fb.deleteDoc(shopDoc(shopId)));
+  saveJob(shopId, null);
 }
 export async function markBackup(shopId) {
   await wrap(() => fb.setDoc(shopDoc(shopId), { lastBackupAt: new Date().toISOString(), lastBackupBy: me.name }, { merge: true }));

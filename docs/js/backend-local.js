@@ -71,6 +71,7 @@ export async function replaceShopData(shopId, result, onProgress) {
   onProgress?.(1);
   await saveData(data);
 }
+export function importJob() { return null; }
 export async function shopInfo() { const d = await getData(); return { importedAt: d.importedAt, bills: d.bills.length }; }
 
 export async function listUsers() { return data?.demoUsers || [USER]; }

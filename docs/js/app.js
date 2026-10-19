@@ -55,6 +55,7 @@ function drawHeader() {
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   const nAlert = alertsOn() ? currentAlerts().count : 0;
   $('#bell')?.remove();
+  if (typeof drawImportBadge === 'function') setTimeout(drawImportBadge, 0);
   if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
@@ -1399,9 +1400,19 @@ function runImport(bytes, opts) {
     w.postMessage({ bytes, opts });
   });
 }
+// An import keeps running if the person opens another page; the header shows its progress.
+const importRun = { running: false, shopId: null, pct: 0 };
+window.addEventListener('beforeunload', (e) => { if (importRun.running) { e.preventDefault(); e.returnValue = ''; } });
+function drawImportBadge() {
+  $('#importBadge')?.remove();
+  if (!importRun.running) return;
+  $('#shopName')?.insertAdjacentHTML('afterend', `<a id="importBadge" class="pill" href="#import" style="background:var(--orange);color:#fff">กำลังนำเข้า ${Math.round(importRun.pct * 100)}% · อย่าปิดโปรแกรม</a>`);
+}
+const QUOTA_DAY = 20000;
 async function viewImport() {
   const info = await backend.shopInfo(shopId).catch(() => ({}));
   view.innerHTML = `${dataTabs('import')}
+  ${importRun.running ? `<div class="ok" id="importLive">กำลังบันทึก… ${Math.round(importRun.pct * 100)}%</div>` : ''}
   <div class="note">ก่อนเริ่ม: <b>ปิดโปรแกรมเก่า</b>ก่อน ไม่งั้นข้อมูลล่าสุดอาจยังไม่ถูกบันทึกลงไฟล์ · ระบบอ่านไฟล์อย่างเดียว ไม่แก้ไฟล์เดิม</div>
   <section class="card"><div class="step"><span class="n">1</span><div style="flex:1;display:flex;flex-direction:column;gap:10px">
     <h2>เลือกโฟลเดอร์โปรแกรมเก่า</h2>
@@ -1465,7 +1476,12 @@ async function viewImport() {
     const stat = (k, v) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
     $('#stats').innerHTML = stat('ลูกค้า', s.customers) + stat('สินค้า', s.products) + stat('บิลขาย', s.bills.toLocaleString()) + stat('บิลค้างชำระ', s.openBills)
       + stat('เงินต้นค้างรวม', '฿' + money(s.openPrincipal)) + stat('ลูกค้าที่ค้าง', s.openCustomers) + stat('ใบเสร็จรับชำระ', s.receipts) + stat('สต๊อก ณ งวด', s.stockPeriod);
-    $('#warnings').innerHTML = s.warnings.map((w) => `<div class="note">${esc(w)}</div>`).join('');
+    const nWrites = result.customers.length + result.products.length + result.bills.length + (result.receipts || []).length;
+    const job = backend.importJob(shopId, result);
+    $('#warnings').innerHTML = s.warnings.map((w) => `<div class="note">${esc(w)}</div>`).join('')
+      + (backend.mode === 'cloud' && nWrites > QUOTA_DAY * 0.85 ? `<div class="note">ข้อมูลชุดนี้ต้องบันทึก <b>${nWrites.toLocaleString()} รายการ</b> · Firebase แบบฟรีบันทึกได้วันละ ${QUOTA_DAY.toLocaleString()} รายการ อาจนำเข้าไม่จบในวันเดียว (ถ้าค้าง กด "นำเข้าต่อ" วันถัดไปหลัง 15:00 น. ได้ ข้อมูลไม่หาย) · หรือเลือก <b>ช่วงปีให้น้อยลง</b> บิลค้างชำระมาครบทุกปีอยู่แล้ว</div>` : '')
+      + (job?.same ? `<div class="ok">มีการนำเข้าข้อมูลชุดนี้ค้างไว้ ${Math.round(job.pct * 100)}% · กด "นำเข้าต่อ" จะทำต่อจากเดิม ไม่ลบหรือบันทึกซ้ำ</div>` : '');
+    $('#btnImport').textContent = job?.same ? `นำเข้าต่อ (ค้าง ${Math.round(job.pct * 100)}%)` : 'นำเข้าข้อมูล';
     const names = new Map(result.customers.map((c) => [c.code, c]));
     const by = new Map();
     for (const b of result.bills) if (b.status === 'open') { const x = by.get(b.customerCode) || { n: 0, sum: 0 }; x.n++; x.sum += b.total; by.set(b.customerCode, x); }
@@ -1476,14 +1492,24 @@ async function viewImport() {
   });
   $('#btnImport').addEventListener('click', async () => {
     if (!result || !confirm(`ยืนยันนำเข้าเป็นข้อมูลของ "${settings.label || settings.name || shopId}"?\nข้อมูลเดิมของร้านนี้จะถูกแทนที่ทั้งหมด`)) return;
+    if (importRun.running) { message('กำลังนำเข้าอยู่แล้ว รอให้เสร็จก่อน'); return; }
     const btn = $('#btnImport'); btn.disabled = true;
+    const targetShop = shopId;
+    Object.assign(importRun, { running: true, shopId: targetShop, pct: 0 }); drawImportBadge();
+    const show = (t) => { for (const el of [$('#importState'), $('#importLive')]) if (el) el.textContent = t; };
     try {
-      await backend.replaceShopData(shopId, result, (p) => { $('#importState').textContent = `กำลังบันทึก… ${Math.round(p * 100)}%`; });
-      $('#importState').textContent = '';
+      await backend.replaceShopData(targetShop, result, (p) => { importRun.pct = p; show(`กำลังบันทึก… ${Math.round(p * 100)}% · เปิดหน้าอื่นได้ แต่อย่าปิดโปรแกรม`); drawImportBadge(); });
+      importRun.running = false; drawImportBadge();
+      show('');
+      toast('นำเข้าข้อมูลเรียบร้อย');
+      if (backend.mode === 'local' && shopId === targetShop) { shop = await backend.openShop(shopId, onRemoteChange); data = shop.data; }
+      if (!$('#msg')) return;
       message(`นำเข้าเรียบร้อย · ลูกค้า ${result.summary.customers} · สินค้า ${result.summary.products} · บิล ${result.summary.bills.toLocaleString()} · ค้าง ฿${money(result.summary.openPrincipal)}`, 'ok');
-      if (backend.mode === 'local') { shop = await backend.openShop(shopId, onRemoteChange); data = shop.data; }
-    } catch (e) { message('บันทึกไม่สำเร็จ: ' + esc(e.message)); }
-    finally { btn.disabled = false; }
+    } catch (e) {
+      importRun.running = false; drawImportBadge(); show('');
+      if ($('#msg')) message('นำเข้ายังไม่เสร็จ: ' + esc(e.message) + '<br>ข้อมูลที่บันทึกแล้วไม่หาย · เลือกไฟล์เดิม กด "ดูสรุปก่อนนำเข้า" แล้วกด <b>"นำเข้าต่อ"</b> เพื่อทำต่อจากที่ค้าง');
+      else alert('นำเข้ายังไม่เสร็จ: ' + e.message);
+    } finally { if (btn.isConnected) btn.disabled = false; }
   });
 }
 
