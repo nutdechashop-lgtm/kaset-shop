@@ -1348,6 +1348,7 @@ async function viewUsers() {
   try { users = await backend.listUsers(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const shopLabel = (id) => shops.find((s) => s.id === id)?.label || id;
   const asAdmin = role() === 'admin';
+  const canDelete = user.role === 'admin' && !previewing(); // only the real super-admin
   const myShops = asAdmin ? shops : shops.filter((s) => s.id === shopId || user.shops?.includes(s.id));
   const roles = asAdmin ? ['owner', 'staff', 'admin'] : ['staff'];
   if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
@@ -1357,7 +1358,7 @@ async function viewUsers() {
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
       <td>${u.active ? '<span class="pill cash">ใช้งาน</span>' : '<span class="pill cancel">ปิด</span>'}</td>
-      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}</td></tr>`).join('')}
+      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
   </section>
@@ -1373,6 +1374,19 @@ async function viewUsers() {
     const on = b.dataset.active !== '1';
     if (!confirm(on ? 'เปิดใช้รหัสนี้?' : 'ปิดรหัสนี้? คนที่ใช้รหัสนี้จะเข้าระบบไม่ได้')) return;
     try { await backend.setUserActive(b.dataset.toggle, on); viewUsers(); } catch (e) { toast(e.message); }
+  }));
+  $$('[data-deluser]').forEach((b) => b.addEventListener('click', () => {
+    const { deluser: uid, code, name } = b.dataset;
+    openDialog(`<h2 style="color:var(--red)">ลบรหัส <span class="mono">${esc(code)}</span></h2>
+      <div>${esc(name)} · คนที่ใช้รหัสนี้จะเข้าระบบไม่ได้อีก และรหัสจะหายจากรายการ</div>
+      <div class="note">บิลและใบเสร็จที่คนนี้เคยทำยังอยู่ครบ (ชื่อผู้ขายยังแสดงตามเดิม) · ถ้าแค่พักใช้ชั่วคราว ให้ใช้ "ปิดรหัส" แทน</div>
+      <label class="field">พิมพ์รหัส <b class="mono">${esc(code)}</b> เพื่อยืนยัน<input type="text" name="confirm" autocomplete="off" required style="font-family:var(--mono)"></label>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn primary" value="ok" style="background:var(--red);border-color:var(--red)">ลบรหัสนี้</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+      if (f.confirm.value.trim() !== code) throw new Error('พิมพ์รหัสไม่ตรง');
+      await backend.deleteUser(uid);
+      toast(`ลบรหัส ${code} แล้ว`); setTimeout(viewUsers, 0);
+    });
   }));
   $('#addu')?.addEventListener('click', () => openDialog(`<h2>เพิ่มรหัสเข้าระบบ</h2>
     <div class="form-grid">

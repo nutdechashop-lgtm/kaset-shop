@@ -30,7 +30,7 @@ function authMsg(e) {
   if (/invalid-credential|wrong-password|user-not-found|invalid-email/.test(c)) return 'รหัสหรือ PIN ไม่ถูกต้อง';
   if (/too-many-requests/.test(c)) return 'ใส่ผิดหลายครั้ง รอสักครู่แล้วลองใหม่';
   if (/network/.test(c)) return 'ต่ออินเทอร์เน็ตไม่ได้';
-  if (/email-already-in-use/.test(c)) return 'รหัสนี้มีคนใช้แล้ว';
+  if (/email-already-in-use/.test(c)) return 'รหัสนี้มีคนใช้แล้ว (หรือเคยถูกลบไป) ให้ตั้งรหัสอื่น เช่น เติมตัวเลขต่อท้าย';
   if (/weak-password/.test(c)) return 'PIN ต้องมี 6 หลัก';
   if (/permission-denied/.test(c)) return 'ไม่มีสิทธิ์ทำรายการนี้';
   if (/resource-exhausted/.test(c)) return QUOTA_MSG;
@@ -318,6 +318,15 @@ export async function createUser({ code, name, pin, role, shops }) {
     await wrap(() => fb.setDoc(fb.doc(db, 'users', cred.user.uid), { code: code.trim(), name: name.trim(), role, shops: role === 'admin' ? [] : shops, active: true, createdBy: me.uid, createdAt: fb.serverTimestamp() }));
     await fb.signOut(sa);
   } finally { await fb.deleteApp(second); }
+}
+// Super-admin only: remove a login code. The profile goes (so the code can never sign in again);
+// the sign-in account itself can only be removed in Firebase Console → Authentication.
+export async function deleteUser(uid) {
+  if (me?.role !== 'admin') throw new Error('ลบรหัสได้เฉพาะแอดมินใหญ่');
+  if (uid === me.uid) throw new Error('ลบรหัสของตัวเองไม่ได้');
+  const cfg = await wrap(() => fb.getDoc(fb.doc(db, 'config', 'main')));
+  if (cfg.data()?.adminUid === uid) throw new Error('รหัสแอดมินใหญ่คนแรกลบไม่ได้');
+  await wrap(() => fb.deleteDoc(fb.doc(db, 'users', uid)));
 }
 export async function setUserActive(uid, active) { await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { active })); }
 export async function changeMyPin(oldPin, newPin) {
