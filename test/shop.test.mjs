@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -152,4 +152,17 @@ assert.equal(await hashPin('1234', 's'), await hashPin('1234', 's')); assert.not
 assert.equal(isLow({ stock: 9, minStock: 10 }), true); assert.equal(isLow({ stock: 10, minStock: 10 }), false);
 assert.equal(isLow({ stock: -1, minStock: 0 }), false); assert.equal(isLow({ stock: 0, minStock: 5, noStock: true }), false);
 assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', stock: 1, minStock: 20 }, { name: 'c', stock: 50, minStock: 20 }]).map((p) => p.name), ['b', 'a']);
+// debtors with no payment for more than 6 months
+{
+  const sd = { customers: [{ code: 'a', lastPaidAt: '2026-01-05' }, { code: 'b' }, { code: 'c', lastPaidAt: '2026-01-01' }, { code: 'd' }], products: [], receipts: [{ customerCode: 'c', date: '2026-09-01' }],
+    bills: [{ no: '1', customerCode: 'a', type: 'credit', status: 'open', date: '2025-12-01', rate: 0, total: 100, principalLeft: 100 },
+            { no: '2', customerCode: 'b', type: 'credit', status: 'open', date: '2026-02-01', rate: 0, total: 50, principalLeft: 50 },
+            { no: '3', customerCode: 'c', type: 'credit', status: 'open', date: '2025-11-01', rate: 0, total: 70, principalLeft: 70 },
+            { no: '4', customerCode: 'd', type: 'credit', status: 'open', date: '2025-10-01', rate: 0, total: 90, principalLeft: 60, interestFrom: '2026-08-01' }] };
+  assert.equal(lastPaidDate(sd, 'c'), '2026-09-01'); assert.equal(lastPaidDate(sd, 'd'), '2026-08-01'); assert.equal(lastPaidDate(sd, 'b'), null);
+  assert.deepEqual(stalePayers(sd, '2026-10-19').map((r) => r.code), ['a', 'b']); // a: paid Jan, b: never paid since Feb
+  // paying updates the customer's last payment date
+  receivePayment(sd, settings, { customerCode: 'a', date: '2026-10-19', mode: 'amount', amount: 10 });
+  assert.equal(sd.customers[0].lastPaidAt, '2026-10-19');
+}
 console.log('ALL SHOP CHECKS PASSED');

@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS } from './shop.js';
+import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -44,7 +44,7 @@ const NAV = [
   ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 // Sub-pages that light up a main menu item.
-const NAV_PARENT = { paid: 'debt', overdue: 'debt', bill: 'bills', import: 'backup' };
+const NAV_PARENT = { paid: 'debt', overdue: 'debt', stale: 'debt', bill: 'bills', import: 'backup' };
 const isPhone = () => window.matchMedia('(max-width: 700px)').matches;
 // Where each person lands: owners/admin → home, staff on a phone → stock, staff on a computer → sale.
 const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
@@ -72,7 +72,7 @@ function drawHeader() {
   }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
-const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, stale: viewStale, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
 let current = 'sale';
 function render() {
   if (!shop) return;
@@ -954,7 +954,7 @@ function dataTabs(active) {
   return `<div class="tabs" role="tablist">${[['backup', 'สำรอง / กู้คืนข้อมูล'], ['import', 'นำเข้าข้อมูลจากโปรแกรมเก่า']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
 }
 function debtTabs(active) {
-  return `<div class="tabs" role="tablist">${[['debt', 'ลูกหนี้ทั้งหมด'], ['paid', 'ลูกค้าชำระแล้ว'], ['overdue', 'ค้างนานเกิน 6 เดือน']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
+  return `<div class="tabs" role="tablist">${[['debt', 'ลูกหนี้ทั้งหมด'], ['paid', 'ลูกค้าชำระแล้ว'], ['overdue', 'ค้างนานเกิน 6 เดือน'], ['stale', 'ไม่ชำระนานเกิน 6 เดือน']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
 }
 function viewPaid() {
   const cm = custBy();
@@ -995,6 +995,38 @@ function viewOverdue() {
     ${rows.length ? rows.map((r) => { const c = cm.get(r.code); return `<tr class="clickable" onclick="location.hash='debt/${encodeURIComponent(r.code)}'"><td class="mono">${esc(r.code)}</td><td>${esc(c?.name || '?')}</td><td>${esc(c?.zone)}</td><td>${esc(c?.phone)}</td><td class="num">${r.bills.length}</td><td>${thDate(r.bills[0].date)}</td><td class="num">${r.bills[0].age}</td><td class="num"><b>${money(r.total)}</b></td></tr>`; }).join('')
       : '<tr><td colspan="8" class="empty">ไม่มีบิลค้างเกิน 6 เดือน</td></tr>'}</table></div>
   </section>`;
+}
+
+// Debtors whose last payment (or, if they never paid, their oldest open bill) is more than 6 months ago.
+let lastPaidChecked = null;
+function viewStale() {
+  const cm = custBy();
+  const today = todayIso();
+  const rows = stalePayers(data, today, 180);
+  const never = rows.filter((r) => !r.lastPaid).length;
+  view.innerHTML = `${debtTabs('stale')}
+  <section class="card">
+    <div class="muted" style="font-size:14px">ลูกหนี้ที่<b>ไม่ได้ชำระเงินเลย</b>มาเกิน 6 เดือน (นับจากวันชำระครั้งล่าสุด ถ้าไม่เคยชำระ นับจากบิลค้างใบเก่าสุด) · กดที่ชื่อเพื่อรับชำระ</div>
+    <div class="stats"><div class="stat"><div class="k">ลูกค้า</div><div class="v">${rows.length}</div></div><div class="stat"><div class="k">ไม่เคยชำระเลย</div><div class="v">${never}</div></div><div class="stat"><div class="k">เงินต้นรวม</div><div class="v">${money(rows.reduce((a, r) => a + r.principal, 0))}</div></div><div class="stat"><div class="k">ยอดรวม (ต้น+ดอก)</div><div class="v">${money(rows.reduce((a, r) => a + r.total, 0))}</div></div></div>
+    <input type="search" id="stq" placeholder="ค้นหาชื่อ หมู่บ้าน หรือรหัส" autocomplete="off">
+    <div class="scroll"><table id="stt"></table></div>
+    <div id="stNote" class="muted" style="font-size:13px"></div>
+  </section>`;
+  const draw = () => {
+    const n = norm($('#stq').value);
+    const list = rows.filter((r) => { const c = cm.get(r.code); return !n || norm(c?.name).includes(n) || norm(c?.zone).includes(n) || r.code.startsWith($('#stq').value.trim()); });
+    $('#stt').innerHTML = `<tr><th>รหัส</th><th>ลูกค้า</th><th>หมู่บ้าน</th><th>โทร</th><th>ชำระล่าสุด</th><th class="num">ไม่ชำระมา (วัน)</th><th class="num">บิลค้าง</th><th class="num">ยอดรวม</th></tr>`
+      + (list.length ? list.map((r) => { const c = cm.get(r.code); return `<tr class="clickable" onclick="location.hash='debt/${encodeURIComponent(r.code)}'"><td class="mono">${esc(r.code)}</td><td>${esc(c?.name || '?')}</td><td>${esc(c?.zone)}</td><td>${esc(c?.phone)}</td><td>${r.lastPaid ? thDate(r.lastPaid) : `<span class="pill cancel">ไม่เคยชำระ</span> <span class="muted" style="font-size:12px">บิลแรก ${thDate(r.oldestBill)}</span>`}</td><td class="num"><b>${r.days.toLocaleString()}</b></td><td class="num">${r.bills}</td><td class="num"><b>${money(r.total)}</b></td></tr>`; }).join('')
+        : '<tr><td colspan="8" class="empty">ไม่มีลูกหนี้ที่ไม่ชำระนานเกิน 6 เดือน</td></tr>');
+  };
+  $('#stq').addEventListener('input', draw); draw();
+  // Shops imported before the program kept last-payment dates: fill them once from the saved receipts.
+  if (backend.mode === 'cloud' && lastPaidChecked !== shopId) {
+    lastPaidChecked = shopId;
+    $('#stNote').textContent = 'กำลังตรวจวันชำระล่าสุดจากใบเสร็จเก่า…';
+    backend.backfillLastPaid(shopId).then((did) => { if (current !== 'stale') return; if (did) viewStale(); else if ($('#stNote')) $('#stNote').textContent = ''; })
+      .catch(() => { if ($('#stNote')) $('#stNote').textContent = ''; });
+  }
 }
 
 // ---------------- stock: count / adjust and transfer to other shops ----------------

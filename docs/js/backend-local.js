@@ -72,6 +72,7 @@ export async function replaceShopData(shopId, result, onProgress) {
   await saveData(data);
 }
 export function importJob() { return null; }
+export async function backfillLastPaid() { return false; }
 export async function shopInfo() { const d = await getData(); return { importedAt: d.importedAt, bills: d.bills.length }; }
 
 export async function listUsers() { return data?.demoUsers || [USER]; }
@@ -99,6 +100,8 @@ export async function commitReceiptVoid(shopId, receiptNo, meta = {}) {
   const res = voidReceipt(data.receipts[i], data.bills.filter((b) => nos.has(b.no)), { ...meta, by: meta.by || USER.name });
   data.receipts[i] = res.receipt;
   for (const b of res.bills) data.bills[data.bills.findIndex((x) => x.no === b.no)] = b;
+  const c = data.customers.find((x) => x.code === res.receipt.customerCode);
+  if (c) c.lastPaidAt = data.receipts.filter((x) => x.customerCode === c.code && x.status !== 'void').reduce((m, x) => (x.date > m ? x.date : m), '') || null;
   await saveData(data); return res.receipt;
 }
 export async function createRequest(shopId, req) {

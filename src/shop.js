@@ -1,6 +1,6 @@
 // Shop operations on the local data record { customers, products, bills, receipts }.
 // Pure logic (no DOM) so it can be tested in Node and reused when the data moves online.
-import { round2, allocatePayment, payBills, billBalance } from './interest.js';
+import { round2, allocatePayment, payBills, billBalance, daysBetween } from './interest.js';
 
 export const RATES = [2, 1.75, 1.5, 1.25, 1, 0.5, 0];
 export const GRACE_MONTHS = [1, 2, 3, 4, 5, 6];
@@ -157,6 +157,8 @@ export function receivePayment(data, settings, input, opts = {}) {
   };
   receipt.remaining = round2(owedTotal - receipt.total);
   data.receipts.push(receipt);
+  const cust = data.customers?.find((c) => c.code === input.customerCode);
+  if (cust && !(cust.lastPaidAt > date)) cust.lastPaidAt = date;
   return receipt;
 }
 
@@ -375,6 +377,27 @@ export function bankList(data, asOf, opts = {}) {
   return { groups: list, people: list.reduce((s, g) => s + g.rows.length, 0), total: round2(list.reduce((s, g) => s + g.total, 0)) };
 }
 // One shop at a glance (home screen / admin overview).
+// ---------- debtors who have not paid for a long time ----------
+// Last payment = newest of: the customer's lastPaidAt, their receipts in memory, partial payments on open bills.
+// Never paid → counted from their oldest open bill.
+export function lastPaidDate(data, code) {
+  let last = data.customers?.find((c) => c.code === code)?.lastPaidAt || '';
+  for (const r of data.receipts || []) if (r.customerCode === code && r.status !== 'void' && r.date > last) last = r.date;
+  for (const b of data.bills || []) if (b.customerCode === code && b.status === 'open' && b.interestFrom && b.interestFrom > last) last = b.interestFrom;
+  return last || null;
+}
+export function stalePayers(data, asOf, days = 180) {
+  const out = [];
+  for (const [code, d] of customerDebts(data, asOf)) {
+    const last = lastPaidDate(data, code);
+    const oldest = d.bills.reduce((m, b) => (!m || b.date < m ? b.date : m), '');
+    const since = last || oldest;
+    const n = daysBetween(since, asOf);
+    if (n > days) out.push({ code, lastPaid: last, oldestBill: oldest, days: n, principal: d.principal, interest: d.interest, total: d.total, bills: d.bills.length });
+  }
+  return out.sort((a, b) => b.days - a.days || b.total - a.total);
+}
+
 // ---------- low-stock alerts ----------
 // minStock = alert when stock drops below this (0 / empty = no alert). Service items never alert.
 export const MIN_PRESETS = [5, 10, 20, 30, 50];

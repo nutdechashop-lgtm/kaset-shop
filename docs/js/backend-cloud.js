@@ -213,6 +213,7 @@ export async function commitPayment(shopId, settings, input) {
     const touched = new Set(receipt.rows.map((r) => r.no));
     for (const b of scratch.bills) if (touched.has(b.no)) tx.set(sub(shopId, 'bills', b.no), b);
     tx.set(sub(shopId, 'receipts', no), receipt);
+    tx.set(sub(shopId, 'customers', input.customerCode), { lastPaidAt: receipt.date }, { merge: true });
     return receipt;
   }));
 }
@@ -361,7 +362,28 @@ async function receiptVoidTx(tx, shopId, receiptNo, meta) {
   return () => { tx.set(rref, res.receipt); for (const b of res.bills) tx.set(sub(shopId, 'bills', b.no), b); return res.receipt; };
 }
 export async function commitReceiptVoid(shopId, receiptNo, meta) {
-  return wrap(() => fb.runTransaction(db, async (tx) => (await receiptVoidTx(tx, shopId, receiptNo, { ...meta, by: meta.by || me.name }))()));
+  const r = await wrap(() => fb.runTransaction(db, async (tx) => (await receiptVoidTx(tx, shopId, receiptNo, { ...meta, by: meta.by || me.name }))()));
+  await refreshLastPaid(shopId, r.customerCode).catch(() => {});
+  return r;
+}
+// The customer's last payment date after a receipt was cancelled.
+async function refreshLastPaid(shopId, code) {
+  const s = await wrap(() => fb.getDocs(fb.query(sub(shopId, 'receipts'), fb.where('customerCode', '==', code))));
+  const last = s.docs.map((d) => d.data()).filter((x) => x.status !== 'void').reduce((m, x) => (x.date > m ? x.date : m), '');
+  await wrap(() => fb.setDoc(sub(shopId, 'customers', code), { lastPaidAt: last || null }, { merge: true }));
+}
+// One-time fill of customers' last payment dates for shops imported before the program kept them.
+export async function backfillLastPaid(shopId) {
+  const sd = await wrap(() => fb.getDoc(shopDoc(shopId)));
+  if (sd.data()?.lastPaidFilled) return false;
+  const s = await wrap(() => withTimeout(fb.getDocs(sub(shopId, 'receipts')), 120000, 'อ่านใบเสร็จ'));
+  const last = new Map();
+  for (const d of s.docs) { const x = d.data(); if (x.status === 'void' || !x.customerCode || !x.date) continue; if (!(last.get(x.customerCode) >= x.date)) last.set(x.customerCode, x.date); }
+  const ops = [];
+  for (const c of data.customers) { const v = last.get(c.code); if (v && !(c.lastPaidAt >= v)) ops.push((b) => b.set(sub(shopId, 'customers', c.code), { lastPaidAt: v }, { merge: true })); }
+  await commitInBatches(ops);
+  await wrap(() => fb.setDoc(shopDoc(shopId), { lastPaidFilled: true }, { merge: true }));
+  return true;
 }
 export async function commitBillChange(shopId, billNo, kind, changes, meta) {
   return wrap(() => fb.runTransaction(db, async (tx) => (await billChangeTx(tx, shopId, billNo, kind, changes, { ...meta, by: meta.by || me.name }))()));

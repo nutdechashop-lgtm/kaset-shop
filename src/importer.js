@@ -155,9 +155,14 @@ export function importDatabase(bytes, opts = {}) {
   for (const p of products) if (!p.price && lastPrice.has(p.code)) { p.price = lastPrice.get(p.code); p.priceFromHistory = true; }
 
   // Receipts (debt payments)
-  const receipts = table(reader, 'RPRunning', ['DocNo', 'DocDate', 'CusCode', 'AmtNet']).map((r) => ({
+  const allReceipts = table(reader, 'RPRunning', ['DocNo', 'DocDate', 'CusCode', 'AmtNet']).map((r) => ({
     no: str(r.DocNo), date: beToIso(r.DocDate), customerCode: cusCode(r.CusCode), total: num(r.AmtNet), source: 'programkaset',
-  })).filter((x) => { if (!x.no || !x.date) return false; const y = +x.date.slice(0, 4) + 543; return y >= fromYear && y <= toYear; });
+  }));
+  // Last payment date per customer, from every receipt in the file (not only the imported years).
+  const lastPaid = new Map();
+  for (const r of allReceipts) if (r.date && r.customerCode && (!lastPaid.has(r.customerCode) || r.date > lastPaid.get(r.customerCode))) lastPaid.set(r.customerCode, r.date);
+  for (const c of customers) if (lastPaid.has(c.code)) c.lastPaidAt = lastPaid.get(c.code);
+  const receipts = allReceipts.filter((x) => { if (!x.no || !x.date) return false; const y = +x.date.slice(0, 4) + 543; return y >= fromYear && y <= toYear; });
 
   const known = new Set(customers.map((c) => c.code));
   const unknownCus = new Set(bills.filter((b) => b.customerCode && !known.has(b.customerCode)).map((b) => b.customerCode));
