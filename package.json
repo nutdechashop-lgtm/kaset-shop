@@ -4,7 +4,7 @@
   "type": "module",
   "description": "ระบบขายหน้าร้าน (แทนโปรแกรม programkaset) — GitHub Pages + Firebase",
   "scripts": {
-    "build": "esbuild src/importer-entry.js --bundle --format=esm --platform=browser --outfile=docs/js/importer.bundle.js --alias:stream=stream-browserify --inject:build/shim.js --define:global=globalThis --minify && esbuild src/firebase-entry.js --bundle --format=esm --platform=browser --minify --outfile=docs/js/firebase.bundle.js && cp src/interest.js src/shop.js docs/js/",
+    "build": "esbuild src/importer-entry.js --bundle --format=esm --platform=browser --outfile=docs/js/importer.bundle.js --alias:stream=stream-browserify --inject:build/shim.js --define:global=globalThis --minify && esbuild src/firebase-entry.js --bundle --format=esm --platform=browser --minify --outfile=docs/js/firebase.bundle.js && esbuild src/xlsx-entry.js --bundle --format=esm --platform=browser --minify --outfile=docs/js/xlsx.bundle.js && cp src/interest.js src/shop.js docs/js/",
     "test": "node test/shop.test.mjs && node test/import.test.mjs"
   },
   "dependencies": {
@@ -15,6 +15,7 @@
     "mdb-reader": "^3.2.0",
     "process": "^0.11.10",
     "stream-browserify": "^3.0.0",
-    "util": "^0.12.5"
+    "util": "^0.12.5",
+    "xlsx": "^0.18.5"
   }
 }

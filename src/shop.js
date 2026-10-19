@@ -188,6 +188,24 @@ export function voidReceipt(receipt, bills, { by = '', reason = '', at = new Dat
   return { receipt: { ...receipt, status: 'void', voidBy: by, voidReason: reason, voidAt: at }, bills: restored };
 }
 
+// End-of-day cash check: what came in on one day, split by type and by person.
+export function closeSummary(data, iso) {
+  const bills = data.bills.filter((b) => b.date === iso && b.status !== 'cancelled' && b.source !== 'programkaset').sort((a, b) => (a.no < b.no ? -1 : 1));
+  const receipts = data.receipts.filter((r) => r.date === iso && r.status !== 'void' && r.source !== 'programkaset').sort((a, b) => (a.no < b.no ? -1 : 1));
+  const sum = (arr, k = 'total') => round2(arr.reduce((t, x) => t + (x[k] || 0), 0));
+  const cash = bills.filter((b) => b.type === 'cash'), credit = bills.filter((b) => b.type === 'credit');
+  const people = new Map();
+  const add = (who, k, v) => { const p = people.get(who || '-') || { name: who || '-', cash: 0, paid: 0, credit: 0 }; p[k] = round2(p[k] + v); people.set(who || '-', p); };
+  for (const b of cash) add(b.by, 'cash', b.total);
+  for (const b of credit) add(b.by, 'credit', b.total);
+  for (const r of receipts) add(r.by, 'paid', r.total);
+  return {
+    date: iso, cashBills: cash, creditBills: credit, receipts,
+    cash: sum(cash), credit: sum(credit), paid: sum(receipts), paidPrincipal: sum(receipts, 'totalPrincipal'), paidInterest: sum(receipts, 'totalInterest'),
+    cashIn: round2(sum(cash) + sum(receipts)), people: [...people.values()],
+  };
+}
+
 // Money in for a day: cash sales + debt payments received.
 export function daySummary(data, iso) {
   const bills = data.bills.filter((b) => b.date === iso && b.status !== 'cancelled' && b.source !== 'programkaset');
@@ -396,6 +414,46 @@ export function stalePayers(data, asOf, days = 180) {
     if (n > days) out.push({ code, lastPaid: last, oldestBill: oldest, days: n, principal: d.principal, interest: d.interest, total: d.total, bills: d.bills.length });
   }
   return out.sort((a, b) => b.days - a.days || b.total - a.total);
+}
+
+// ---------- sales & profit report ----------
+// bills / receipts: those dated from..to (already fetched). products: for today's cost price.
+export function salesReport(bills, receipts, products, from, to) {
+  const cost = new Map((products || []).map((p) => [p.code, Number(p.cost) || 0]));
+  const name = new Map((products || []).map((p) => [p.code, p]));
+  const inRange = (d) => d >= from && d <= to;
+  const sold = bills.filter((b) => inRange(b.date) && b.status !== 'cancelled');
+  const rcp = receipts.filter((r) => inRange(r.date) && r.status !== 'void');
+  const t = { bills: sold.length, cash: 0, credit: 0, sales: 0, discount: 0, profit: 0, costedSales: 0, noCostLines: 0 };
+  const days = new Map(), items = new Map();
+  const day = (d) => days.get(d) || (days.set(d, { date: d, bills: 0, cash: 0, credit: 0, paid: 0, interest: 0, profit: 0 }), days.get(d));
+  for (const b of sold) {
+    const dd = day(b.date); dd.bills++;
+    dd[b.type === 'credit' ? 'credit' : 'cash'] += b.total; t[b.type === 'credit' ? 'credit' : 'cash'] += b.total;
+    t.sales += b.total; t.discount += b.discount || 0;
+    let costed = 0, gross = 0;
+    for (const l of b.lines || []) {
+      const c = cost.get(l.code) || 0;
+      const it = items.get(l.code) || { code: l.code, name: l.name || name.get(l.code)?.name || l.code, unit: l.unit || name.get(l.code)?.unit || '', qty: 0, amount: 0, profit: 0, noCost: !c };
+      it.qty += l.qty; it.amount += l.amount;
+      if (c) { const g = l.amount - l.qty * c; it.profit += g; gross += g; costed += l.amount; } else t.noCostLines++;
+      items.set(l.code, it);
+    }
+    const share = b.subtotal ? costed / b.subtotal : 0;
+    const prof = gross - (b.discount || 0) * share;
+    dd.profit += prof; t.profit += prof; t.costedSales += costed;
+  }
+  const paid = { receipts: rcp.length, total: 0, principal: 0, interest: 0, noSplit: 0 };
+  for (const r of rcp) {
+    const dd = day(r.date); dd.paid += r.total || 0; paid.total += r.total || 0;
+    if (r.totalInterest === undefined) { paid.noSplit++; continue; }
+    paid.principal += r.totalPrincipal || 0; paid.interest += r.totalInterest || 0; dd.interest += r.totalInterest || 0;
+  }
+  const r2 = (o) => { for (const k of Object.keys(o)) if (typeof o[k] === 'number') o[k] = round2(o[k]); return o; };
+  const daily = [...days.values()].sort((a, b) => (a.date < b.date ? -1 : 1)).map(r2);
+  const months = new Map();
+  for (const d of daily) { const m = d.date.slice(0, 7); const x = months.get(m) || { month: m, bills: 0, cash: 0, credit: 0, paid: 0, interest: 0, profit: 0 }; for (const k of ['bills', 'cash', 'credit', 'paid', 'interest', 'profit']) x[k] += d[k]; months.set(m, x); }
+  return { from, to, totals: r2(t), paid: r2(paid), daily, monthly: [...months.values()].map(r2), items: [...items.values()].map(r2).sort((a, b) => b.amount - a.amount) };
 }
 
 // ---------- low-stock alerts ----------

@@ -73,6 +73,18 @@ export async function replaceShopData(shopId, result, onProgress) {
 }
 export function importJob() { return null; }
 export async function reserveNumbers() { return null; }
+export async function findRange(shopId, from, to) { return { bills: data.bills.filter((b) => b.date >= from && b.date <= to), receipts: data.receipts.filter((r) => r.date >= from && r.date <= to) }; }
+export async function shopProducts() { return data.products; }
+export function addLog(shopId, entry) { data.logs ||= []; data.logs.push({ id: 'l' + Date.now() + Math.random().toString(36).slice(2, 6), ...entry, by: USER.name, at: new Date().toISOString() }); saveData(data); }
+export async function listLogs() { return [...(data.logs || [])].sort((a, b) => (a.at < b.at ? 1 : -1)); }
+export async function setPrices(shopId, changes) { for (const { code, price } of changes) { const p = data.products.find((x) => x.code === code); if (p) { p.price = price; p.priceFromHistory = false; } } await saveData(data); }
+export async function saveClose(shopId, rec) {
+  data.closes ||= [];
+  const prev = data.closes.find((c) => c.date === rec.date);
+  const out = { ...rec, by: USER.name, at: new Date().toISOString(), history: [...(prev?.history || []), ...(prev ? [{ by: prev.by, at: prev.at, counted: prev.counted, diff: prev.diff }] : [])].slice(-10) };
+  data.closes = [...data.closes.filter((c) => c.date !== rec.date), out]; await saveData(data); return out;
+}
+export async function getClose(shopId, date) { return (data.closes || []).find((c) => c.date === date) || null; }
 export const pendingCount = () => 0;
 export async function flushPending() {}
 export async function backfillLastPaid() { return false; }
@@ -127,12 +139,12 @@ export async function exportShop() {
   const { id, ...s } = settings;
   const asDocs = (arr, key) => (arr || []).map((x) => ({ id: x[key] ?? x.id, data: x }));
   return { format: 'dreamshop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: USER.name, shopId: 'local', settings: s,
-    collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [], transfers: asDocs(d.transfers, 'no'), stockLogs: asDocs(d.stockLogs, 'at') } };
+    collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [], transfers: asDocs(d.transfers, 'no'), stockLogs: asDocs(d.stockLogs, 'at'), closes: asDocs(d.closes, 'date'), logs: asDocs(d.logs, 'id') } };
 }
 export async function restoreShop(shopId, backup, onProgress) {
   const c = backup.collections || {};
   const vals = (k) => (c[k] || []).map((x) => x.data);
-  data = { customers: vals('customers'), products: vals('products'), bills: vals('bills'), receipts: vals('receipts'), requests: vals('requests'), transfers: vals('transfers'), stockLogs: vals('stockLogs') };
+  data = { customers: vals('customers'), products: vals('products'), bills: vals('bills'), receipts: vals('receipts'), requests: vals('requests'), transfers: vals('transfers'), stockLogs: vals('stockLogs'), closes: vals('closes'), logs: vals('logs') };
   await saveData(data);
   const { lastBackupAt, ...s } = backup.settings || {};
   await storeSettings({ ...(await getSettings(DEFAULT_SETTINGS)), ...s });

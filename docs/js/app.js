@@ -1,11 +1,11 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers } from './shop.js';
+import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers, closeSummary, salesReport } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart, addDays } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
-const backend = await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js');
+const backend = withAudit(await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js'));
 
 let user = null, shops = [], shopId = null, shop = null, data = null, settings = null;
 const view = document.getElementById('view');
@@ -40,11 +40,11 @@ function toast(msg) {
 
 // ---------------- header / routing ----------------
 const NAV = [
-  ['home', 'หน้าแรก', true], ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า'], ['stock', 'สต๊อก / โอน'],
-  ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
+  ['home', 'หน้าแรก', true], ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า'], ['stock', 'สต๊อก / โอน'], ['close', 'ปิดร้าน'],
+  ['report', 'รายงาน', true], ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 // Sub-pages that light up a main menu item.
-const NAV_PARENT = { paid: 'debt', overdue: 'debt', stale: 'debt', bill: 'bills', import: 'backup' };
+const NAV_PARENT = { paid: 'debt', overdue: 'debt', stale: 'debt', bill: 'bills', import: 'backup', prices: 'products' };
 const isPhone = () => window.matchMedia('(max-width: 700px)').matches;
 // Where each person lands: owners/admin → home, staff on a phone → stock, staff on a computer → sale.
 const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
@@ -76,7 +76,7 @@ function drawHeader() {
   }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
-const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, stale: viewStale, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, stale: viewStale, close: viewClose, report: viewReport, prices: viewPrices, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
 let current = 'sale';
 function render() {
   if (!shop) return;
@@ -96,7 +96,7 @@ function onRemoteChange(kind) {
   if (kind === 'settings') { settings = shop.settings; drawHeader(); return; }
   checkAlerts().catch(() => {});
   if (current !== 'approve') drawHeader(), markNav();
-  if (dlg.open || ['sale', 'import', 'settings', 'users', 'bank', 'backup'].includes(current)) return;
+  if (dlg.open || ['sale', 'import', 'settings', 'users', 'bank', 'backup', 'report', 'close'].includes(current)) return;
   const a = document.activeElement;
   if (a && view.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && a.value) return;
   render();
@@ -982,6 +982,48 @@ document.addEventListener('click', async (e) => {
   if (current === 'home') render();
 });
 
+// ---------------- audit log: record who changed what ----------------
+// Wraps the data functions: after a change succeeds, a line goes into the shop's log.
+function withAudit(raw) {
+  const api = { ...raw };
+  const log = (entry) => { try { if (shopId) raw.addLog?.(shopId, entry); } catch { /* never block the work */ } };
+  const prod = (code) => data?.products.find((p) => p.code === code);
+  const wrap = (name, before, after) => {
+    if (!raw[name]) return;
+    api[name] = async (...args) => { const ctx = before ? before(...args) : null; const res = await raw[name](...args); try { const e = after(ctx, res, ...args); if (e) log(e); } catch { /* ignore */ } return res; };
+  };
+  const diffs = (a, b, fields) => fields.filter(([k]) => (a?.[k] ?? '') !== (b?.[k] ?? '') && b?.[k] !== undefined).map(([k, t, fmt]) => `${t} ${fmt ? fmt(a?.[k]) : a?.[k] ?? '-'} → ${fmt ? fmt(b[k]) : b[k]}`);
+  wrap('saveProduct', (sid, p) => (prod(p.code) ? { ...prod(p.code) } : null), (old, r, sid, p) => {
+    if (!old) return { action: 'เพิ่มสินค้า', target: `${p.code} ${p.name || ''}`, detail: `ราคา ${money(p.price || 0)} · สต๊อก ${p.stock ?? 0}` };
+    if (p.deleted) return { action: 'ลบสินค้า', target: `${p.code} ${old.name}` };
+    const d = diffs(old, p, [['name', 'ชื่อ'], ['price', 'ราคา', money], ['cost', 'ราคาทุน', money], ['stock', 'สต๊อก'], ['unit', 'หน่วย']]);
+    return d.length ? { action: d.some((x) => x.startsWith('ราคา ')) ? 'แก้ราคาสินค้า' : d.some((x) => x.startsWith('สต๊อก')) ? 'แก้สต๊อก' : 'แก้ไขสินค้า', target: `${p.code} ${old.name}`, detail: d.join(' · ') } : null;
+  });
+  wrap('setPrices', null, (c, r, sid, changes, note) => ({ action: 'ปรับราคาหลายรายการ', target: `${changes.length} รายการ`, detail: (note ? note + ' · ' : '') + changes.slice(0, 30).map((x) => `${x.name || x.code} ${money(x.old)}→${money(x.price)}`).join(', ') + (changes.length > 30 ? ' …' : '') }));
+  wrap('adjustStock', (sid, code) => ({ ...prod(code) }), (old, r, sid, code, counted, reason) => ({ action: 'ปรับสต๊อก', target: `${code} ${old?.name || ''}`, detail: `${qtyFmt(old?.stock)} → ${qtyFmt(counted)}${reason ? ' · ' + reason : ''}` }));
+  wrap('saveCustomer', (sid, c) => { const o = data?.customers.find((x) => x.code === c.code); return o ? { ...o } : null; }, (old, r, sid, c) => {
+    if (!old) return { action: 'เพิ่มลูกค้า', target: `${c.code} ${c.name || ''}` };
+    if (c.deleted) return { action: 'ลบลูกค้า', target: `${c.code} ${old.name}` };
+    const d = diffs(old, c, [['name', 'ชื่อ'], ['zone', 'หมู่บ้าน'], ['phone', 'โทร']]);
+    return d.length ? { action: 'แก้ไขลูกค้า', target: `${c.code} ${old.name}`, detail: d.join(' · ') } : null;
+  });
+  wrap('commitSale', null, (c, bill) => (bill.date !== todayIso() ? { action: 'ลงบิลย้อนหลัง', target: bill.no, detail: `วันที่ ${thDate(bill.date)} · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} ฿${money(bill.total)}` } : null));
+  wrap('commitBillChange', null, (c, bill, sid, no, kind, changes, meta) => ({ action: kind === 'cancel' ? 'ยกเลิกบิล' : kind === 'rate' ? 'เปลี่ยนอัตราดอก' : 'แก้ไขบิล', target: no, detail: [kind === 'rate' ? `เป็น ${changes.rate}%` : kind === 'edit' ? `ยอดใหม่ ฿${money(bill?.total)}` : '', meta?.reason ? 'เหตุผล: ' + meta.reason : ''].filter(Boolean).join(' · ') }));
+  wrap('resolveRequest', (sid, id) => data?.requests.find((r) => r.id === id), (req, r, sid, id, ok) => ({ action: ok ? 'อนุมัติคำขอ' : 'ไม่อนุมัติคำขอ', target: req?.billNo || req?.receiptNo || req?.productName || '', detail: `${({ edit: 'แก้ไขบิล', cancel: 'ยกเลิกบิล', rate: 'เปลี่ยนอัตราดอก', voidReceipt: 'ยกเลิกใบเสร็จ', costPin: 'ดูราคาทุน' })[req?.kind] || req?.kind || ''} · ขอโดย ${req?.byName || '-'}${req?.reason ? ' · ' + req.reason : ''}` }));
+  wrap('commitReceiptVoid', null, (c, r, sid, no, meta) => ({ action: 'ยกเลิกใบเสร็จ', target: no, detail: `฿${money(r?.total)}${meta?.reason ? ' · เหตุผล: ' + meta.reason : ''}` }));
+  wrap('changeTransfer', null, (c, t, sid, no, kind) => ({ action: kind === 'cancel' ? 'ยกเลิกการโอน' : 'แก้ไขการโอน', target: no, detail: t?.to ? 'ไป ' + t.to : '' }));
+  wrap('saveSettings', () => ({ ...settings }), (old, r, sid, sNew) => { const d = diffs(old, sNew, [['name', 'ชื่อร้าน'], ['address', 'ที่อยู่'], ['phone', 'โทร'], ['prefix', 'รหัสหน้าเลขบิล'], ['defaultRate', 'ดอกเริ่มต้น']]); return d.length ? { action: 'แก้ตั้งค่าร้าน', detail: d.join(' · ') } : null; });
+  wrap('createUser', null, (c, r, u) => ({ action: 'เพิ่มรหัสเข้าระบบ', target: u.code, detail: `${u.name} · ${ROLE[u.role] || u.role}` }));
+  wrap('setUserActive', null, (c, r, uid, on) => ({ action: on ? 'เปิดรหัส' : 'ปิดรหัส', target: uid }));
+  wrap('deleteUser', null, (c, r, uid) => ({ action: 'ลบรหัสเข้าระบบ', target: uid }));
+  wrap('replaceShopData', null, (c, r, sid, result) => ({ action: 'นำเข้าข้อมูลเก่า', detail: `ลูกค้า ${result.customers.length} · สินค้า ${result.products.length} · บิล ${result.bills.length}` }));
+  wrap('restoreShop', null, (c, r, sid, bk) => ({ action: 'กู้คืนข้อมูล', detail: `จากไฟล์สำรองวันที่ ${bk.exportedAt ? new Date(bk.exportedAt).toLocaleString('th-TH') : '-'}` }));
+  wrap('saveClose', null, (c, rec) => ({ action: 'ปิดร้าน', target: thDate(rec.date), detail: `ควรมี ${money(rec.expected)} · นับได้ ${money(rec.counted)} · ${rec.diff === 0 ? 'ตรง' : rec.diff < 0 ? 'ขาด ' + money(-rec.diff) : 'เกิน ' + money(rec.diff)}` }));
+  wrap('issueCostPin', (sid, id) => data?.requests.find((r) => r.id === id), (req) => ({ action: 'ออก PIN ดูราคาทุน', target: req?.productName || '', detail: 'ให้ ' + (req?.byName || '-') }));
+  wrap('useCostPin', null, (c, ok) => (ok ? { action: 'ใช้ PIN ดูราคาทุน' } : null));
+  return api;
+}
+
 // ---------------- debtor sub-tabs ----------------
 function dataTabs(active) {
   return `<div class="tabs" role="tablist">${[['backup', 'สำรอง / กู้คืนข้อมูล'], ['import', 'นำเข้าข้อมูลจากโปรแกรมเก่า']].map(([k, t]) => `<a href="#${k}" role="tab" aria-selected="${k === active}">${t}</a>`).join('')}</div>`;
@@ -1060,6 +1102,193 @@ function viewStale() {
     backend.backfillLastPaid(shopId).then((did) => { if (current !== 'stale') return; if (did) viewStale(); else if ($('#stNote')) $('#stNote').textContent = ''; })
       .catch(() => { if ($('#stNote')) $('#stNote').textContent = ''; });
   }
+}
+
+// ---------------- reports (owner): sales, profit, interest, all shops, change log ----------------
+const repCache = new Map();
+let repPeriod = 'month', repFrom = '', repTo = '';
+function periodRange(p) {
+  const t = todayIso(), [y, m] = t.split('-').map(Number);
+  const first = (yy, mm) => `${yy}-${String(mm).padStart(2, '0')}-01`;
+  if (p === 'today') return [t, t];
+  if (p === '7') return [addDays(t, -6), t];
+  if (p === 'month') return [first(y, m), t];
+  if (p === 'last') { const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1; return [first(py, pm), addDays(first(y, m), -1)]; }
+  if (p === 'year') return [`${y}-01-01`, t];
+  return [repFrom || first(y, m), repTo || t];
+}
+async function loadRange(id, from, to) {
+  const k = `${id}|${from}|${to}`;
+  const hit = repCache.get(k);
+  if (!hit || Date.now() - hit.at > 3 * 60000) { // re-read after 3 minutes so today's numbers stay fresh
+    const [r, products] = await Promise.all([backend.findRange(id, from, to), backend.shopProducts(id)]);
+    repCache.set(k, { at: Date.now(), rep: salesReport(r.bills, r.receipts, products, from, to) });
+  }
+  return repCache.get(k).rep;
+}
+const pct = (a, b) => (b ? (a / b * 100).toFixed(1) + '%' : '-');
+const monthTh = (ym) => { const [y, m] = ym.split('-'); return `${['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'][+m - 1]} ${+y + 543}`; };
+async function exportXlsx(fileName, sheets) {
+  const X = await import('./xlsx.bundle.js');
+  const wb = X.utils.book_new();
+  for (const [name, rows] of sheets) { const ws = X.utils.aoa_to_sheet(rows); ws['!cols'] = rows[0]?.map((_, i) => ({ wch: Math.min(40, Math.max(10, ...rows.map((r) => String(r[i] ?? '').length + 2))) })); X.utils.book_append_sheet(wb, ws, name.slice(0, 31)); }
+  X.writeFile(wb, fileName);
+}
+function viewReport(arg) {
+  const tab = arg === 'shops' ? 'shops' : arg === 'logs' ? 'logs' : 'sales';
+  view.innerHTML = `<div class="tabs" role="tablist">${[['report', 'sales', 'ยอดขาย / กำไร'], ['report/shops', 'shops', 'เทียบทุกร้าน'], ['report/logs', 'logs', 'ประวัติการแก้ไข']].map(([h, k, t]) => `<a href="#${h}" role="tab" aria-selected="${k === tab}">${t}</a>`).join('')}</div><div id="repBody"></div>`;
+  if (tab === 'logs') return reportLogs();
+  const periods = [['today', 'วันนี้'], ['7', '7 วัน'], ['month', 'เดือนนี้'], ['last', 'เดือนก่อน'], ['year', 'ปีนี้'], ['custom', 'กำหนดเอง']];
+  $('#repBody').innerHTML = `<section class="card">
+    <div class="row">${periods.map(([k, t]) => `<button class="chip" data-p="${k}" aria-pressed="${k === repPeriod}">${t}</button>`).join('')}</div>
+    <div class="row ${repPeriod === 'custom' ? '' : 'hidden'}" id="repCustom"><label class="field">ตั้งแต่<input type="date" id="rf" value="${periodRange('custom')[0]}" max="${todayIso()}"></label><label class="field">ถึง<input type="date" id="rt2" value="${periodRange('custom')[1]}" max="${todayIso()}"></label></div>
+    <div id="repOut"><div class="row muted"><span class="spinner"></span> กำลังคำนวณ…</div></div></section>`;
+  $$('#repBody [data-p]').forEach((b) => b.addEventListener('click', () => { repPeriod = b.dataset.p; viewReport(arg); }));
+  ['#rf', '#rt2'].forEach((id) => $(id)?.addEventListener('change', () => { repFrom = $('#rf').value; repTo = $('#rt2').value; if (repFrom > repTo) [repFrom, repTo] = [repTo, repFrom]; viewReport(arg); }));
+  const [from, to] = periodRange(repPeriod);
+  return tab === 'shops' ? reportShops(from, to) : reportSales(from, to);
+}
+async function reportSales(from, to) {
+  let r; try { r = await loadRange(shopId, from, to); } catch (e) { if ($('#repOut')) $('#repOut').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  if (!$('#repOut')) return;
+  const t = r.totals, pd = r.paid, byMonth = daysBetween(from, to) > 62;
+  const rows = byMonth ? r.monthly : r.daily;
+  const max = Math.max(1, ...rows.map((x) => x.cash + x.credit));
+  const stat = (k, v, sub) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="k">${sub}</div>` : ''}</div>`;
+  let sortBy = 'amount';
+  const itemsHtml = () => `<tr><th>#</th><th>สินค้า</th><th class="num">จำนวน</th><th class="num">ยอดขาย</th><th class="num">กำไร</th></tr>` + [...r.items].sort((a, b) => b[sortBy] - a[sortBy]).slice(0, 30).map((x, i) => `<tr><td>${i + 1}</td><td>${esc(x.name)}</td><td class="num">${qtyFmt(x.qty)} ${esc(x.unit)}</td><td class="num">${money(x.amount)}</td><td class="num">${x.noCost ? '<span class="muted" title="ยังไม่มีราคาทุน">-</span>' : money(x.profit)}</td></tr>`).join('');
+  $('#repOut').innerHTML = `
+    <div class="muted" style="font-size:14px">${thDate(from)} – ${thDate(to)}</div>
+    <div class="stats">${stat('ยอดขายรวม', money(t.sales), `${t.bills.toLocaleString()} บิล`)}${stat('ขายเงินสด', money(t.cash))}${stat('ขายเงินเชื่อ', money(t.credit))}${stat('กำไรขั้นต้น', money(t.profit), `${pct(t.profit, t.costedSales)} ของยอดที่มีราคาทุน`)}${stat('รับชำระหนี้', money(pd.total), `${pd.receipts} ใบ`)}${stat('ดอกเบี้ยที่เก็บได้', money(pd.interest))}</div>
+    ${t.noCostLines ? `<div class="note" style="font-size:13px">มีรายการขาย ${t.noCostLines.toLocaleString()} บรรทัดที่สินค้ายังไม่มีราคาทุน ไม่ได้นับในกำไร · ใส่ราคาทุนได้ที่เมนูสินค้า (กำไรคิดจากราคาทุนปัจจุบัน)</div>` : ''}
+    ${pd.noSplit ? `<div class="note" style="font-size:13px">ใบเสร็จจากโปรแกรมเก่า ${pd.noSplit} ใบไม่ได้แยกเงินต้นกับดอกเบี้ย จึงไม่ได้นับในดอกเบี้ยที่เก็บได้</div>` : ''}
+    <div class="row"><button class="btn" id="repXlsx">ส่งออก Excel</button></div>
+    <h3 style="margin:8px 0 0">${byMonth ? 'รายเดือน' : 'รายวัน'}</h3>
+    <div class="scroll"><table><tr><th>${byMonth ? 'เดือน' : 'วันที่'}</th><th class="num">บิล</th><th class="num">ขายสด</th><th class="num">ขายเชื่อ</th><th style="width:22%"></th><th class="num">กำไร</th><th class="num">รับชำระ</th><th class="num">ดอกเบี้ย</th></tr>
+    ${rows.map((x) => `<tr><td>${byMonth ? monthTh(x.month) : thDate(x.date)}</td><td class="num">${x.bills}</td><td class="num">${money(x.cash)}</td><td class="num">${money(x.credit)}</td><td><div class="bar"><span style="width:${(x.cash / max * 100).toFixed(1)}%"></span><span class="cr" style="width:${(x.credit / max * 100).toFixed(1)}%"></span></div></td><td class="num">${money(x.profit)}</td><td class="num">${money(x.paid)}</td><td class="num">${money(x.interest)}</td></tr>`).join('') || '<tr><td colspan="8" class="empty">ไม่มีรายการในช่วงนี้</td></tr>'}</table></div>
+    <div class="row" style="justify-content:space-between;margin-top:8px"><h3 style="margin:0">สินค้าขายดี</h3><select id="repSort"><option value="amount">เรียงตามยอดขาย</option><option value="qty">เรียงตามจำนวน</option><option value="profit">เรียงตามกำไร</option></select></div>
+    <div class="scroll"><table id="repItems">${itemsHtml()}</table></div>`;
+  $('#repSort').addEventListener('change', (e) => { sortBy = e.target.value; $('#repItems').innerHTML = itemsHtml(); });
+  $('#repXlsx').addEventListener('click', () => exportXlsx(`รายงาน_${safeName(settings.name || settings.label)}_${from}_${to}.xlsx`, [
+    ['สรุป', [['รายการ', 'ยอด'], ['ช่วงวันที่', `${thDate(from)} - ${thDate(to)}`], ['จำนวนบิล', t.bills], ['ยอดขายรวม', t.sales], ['ขายเงินสด', t.cash], ['ขายเงินเชื่อ', t.credit], ['ส่วนลด', t.discount], ['กำไรขั้นต้น', t.profit], ['รับชำระหนี้', pd.total], ['เงินต้นที่รับ', pd.principal], ['ดอกเบี้ยที่เก็บได้', pd.interest]]],
+    [byMonth ? 'รายเดือน' : 'รายวัน', [[byMonth ? 'เดือน' : 'วันที่', 'บิล', 'ขายสด', 'ขายเชื่อ', 'กำไร', 'รับชำระ', 'ดอกเบี้ย'], ...rows.map((x) => [byMonth ? monthTh(x.month) : thDate(x.date), x.bills, x.cash, x.credit, x.profit, x.paid, x.interest])]],
+    ['สินค้าขายดี', [['รหัส', 'สินค้า', 'หน่วย', 'จำนวน', 'ยอดขาย', 'กำไร'], ...r.items.map((x) => [x.code, x.name, x.unit, x.qty, x.amount, x.noCost ? '' : x.profit])]],
+  ]));
+}
+async function reportShops(from, to) {
+  const list = shops.length ? shops : [{ id: shopId, ...settings }];
+  if ($('#repOut')) $('#repOut').innerHTML = `<div class="row muted"><span class="spinner"></span> กำลังอ่านข้อมูล ${list.length} ร้าน…</div>`;
+  const res = [];
+  for (const sh of list) { try { res.push({ sh, r: await loadRange(sh.id, from, to) }); } catch (e) { res.push({ sh, err: e.message }); } }
+  if (!$('#repOut')) return;
+  const ok = res.filter((x) => x.r);
+  const sum = (f) => round2(ok.reduce((a, x) => a + f(x.r), 0));
+  const cols = [['บิล', (r) => r.totals.bills], ['ยอดขายรวม', (r) => r.totals.sales], ['ขายสด', (r) => r.totals.cash], ['ขายเชื่อ', (r) => r.totals.credit], ['กำไร', (r) => r.totals.profit], ['รับชำระ', (r) => r.paid.total], ['ดอกเบี้ย', (r) => r.paid.interest]];
+  const fmt = (i, v) => (i === 0 ? v.toLocaleString() : money(v));
+  $('#repOut').innerHTML = `<div class="muted" style="font-size:14px">${thDate(from)} – ${thDate(to)}</div>
+    <div class="scroll"><table><tr><th>ร้าน</th>${cols.map(([t]) => `<th class="num">${t}</th>`).join('')}</tr>
+    ${res.map(({ sh, r, err }) => `<tr><td><b>${esc(sh.label || sh.name || sh.id)}</b></td>${r ? cols.map(([, f], i) => `<td class="num">${fmt(i, f(r))}</td>`).join('') : `<td colspan="${cols.length}" class="err">${esc(err)}</td>`}</tr>`).join('')}
+    <tr class="p-foot"><td><b>รวมทุกร้าน</b></td>${cols.map(([, f], i) => `<td class="num"><b>${fmt(i, sum(f))}</b></td>`).join('')}</tr></table></div>
+    <div class="row"><button class="btn" id="shopXlsx">ส่งออก Excel</button></div>`;
+  $('#shopXlsx').addEventListener('click', () => exportXlsx(`เทียบทุกร้าน_${from}_${to}.xlsx`, [['เทียบทุกร้าน', [['ร้าน', ...cols.map(([t]) => t)], ...ok.map(({ sh, r }) => [sh.label || sh.name || sh.id, ...cols.map(([, f]) => f(r))]), ['รวม', ...cols.map(([, f]) => sum(f))]]]]));
+}
+async function reportLogs() {
+  $('#repBody').innerHTML = '<section class="card"><div class="row muted"><span class="spinner"></span> กำลังโหลด…</div></section>';
+  let logs; try { logs = await backend.listLogs(shopId, 500); } catch (e) { $('#repBody').innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  if (!$('#repBody')) return;
+  const actions = [...new Set(logs.map((l) => l.action))].sort(), people = [...new Set(logs.map((l) => l.by))].sort();
+  $('#repBody').innerHTML = `<section class="card">
+    <div class="muted" style="font-size:14px">บันทึกอัตโนมัติทุกครั้งที่มีการแก้ราคา แก้หรือปรับสต๊อก แก้/ยกเลิกบิล ยกเลิกใบเสร็จ อนุมัติคำขอ ปิดร้าน และอื่น ๆ (แสดง 500 รายการล่าสุด)</div>
+    <div class="row"><input type="search" id="lq" placeholder="ค้นหา เช่น ชื่อสินค้า เลขบิล" style="flex:1;min-width:180px">
+      <select id="la"><option value="">ทุกการกระทำ</option>${actions.map((a) => `<option>${esc(a)}</option>`).join('')}</select>
+      <select id="lp"><option value="">ทุกคน</option>${people.map((a) => `<option>${esc(a)}</option>`).join('')}</select>
+      <button class="btn" id="logXlsx">ส่งออก Excel</button></div>
+    <div class="scroll"><table id="lt"></table></div></section>`;
+  const shown = () => { const q = norm($('#lq').value), a = $('#la').value, p = $('#lp').value; return logs.filter((l) => (!a || l.action === a) && (!p || l.by === p) && (!q || norm(`${l.target} ${l.detail} ${l.action}`).includes(q))); };
+  const draw = () => { const l = shown(); $('#lt').innerHTML = '<tr><th>เวลา</th><th>ใคร</th><th>ทำอะไร</th><th>รายการ</th><th>รายละเอียด</th></tr>' + (l.length ? l.map((x) => `<tr><td style="white-space:nowrap">${new Date(x.at).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</td><td>${esc(x.by)}</td><td><b>${esc(x.action)}</b></td><td>${esc(x.target || '')}</td><td style="font-size:13px">${esc(x.detail || '')}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีบันทึก</td></tr>'); };
+  ['#lq', '#la', '#lp'].forEach((id) => $(id).addEventListener('input', draw)); draw();
+  $('#logXlsx').addEventListener('click', () => exportXlsx(`ประวัติการแก้ไข_${safeName(settings.name || settings.label)}.xlsx`, [['ประวัติ', [['เวลา', 'ใคร', 'ทำอะไร', 'รายการ', 'รายละเอียด'], ...shown().map((x) => [new Date(x.at).toLocaleString('th-TH'), x.by, x.action, x.target || '', x.detail || ''])]]]));
+}
+
+// ---------------- end-of-day close: count the cash drawer ----------------
+async function viewClose(arg) {
+  const today = todayIso();
+  const date = arg && /^\d{4}-\d{2}-\d{2}$/.test(arg) ? arg : today;
+  const s = closeSummary(data, date);
+  const saved = await backend.getClose(shopId, date).catch(() => null);
+  if (current !== 'close') return;
+  const floatKey = 'closeFloat:' + shopId;
+  const float0 = saved?.float ?? Number(lsGet(floatKey) || 0);
+  const row = (k, v, cls = '') => `<div class="p-split ${cls}"><span>${k}</span><b class="mono">${money(v)}</b></div>`;
+  view.innerHTML = `<section class="card">
+    <div class="row" style="justify-content:space-between;align-items:flex-end">
+      <h2>ปิดร้านประจำวัน</h2>
+      <label class="field" style="max-width:200px">วันที่<input type="date" id="cdate" value="${date}" max="${today}" min="${addDays(today, isManager() ? -34 : -1)}"></label>
+    </div>
+    ${saved ? `<div class="ok" style="font-size:14px">ปิดร้านวันนี้แล้ว โดย <b>${esc(saved.by)}</b> เมื่อ ${new Date(saved.at).toLocaleString('th-TH')} · นับได้ ${money(saved.counted)} · ${saved.diff === 0 ? 'ตรง' : saved.diff < 0 ? 'ขาด ' + money(-saved.diff) : 'เกิน ' + money(saved.diff)} (บันทึกใหม่ทับได้ ระบบเก็บประวัติไว้)</div>` : ''}
+    <div class="close-grid">
+      <div class="close-box">
+        <h3>เงินเข้าลิ้นชัก</h3>
+        ${row(`ขายเงินสด (${s.cashBills.length} บิล)`, s.cash)}
+        ${row(`รับชำระหนี้ (${s.receipts.length} ใบ)`, s.paid)}
+        <div class="muted" style="font-size:13px;margin:-2px 0 4px">เงินต้น ${money(s.paidPrincipal)} · ดอกเบี้ย ${money(s.paidInterest)}</div>
+        <label class="field">เงินทอนตั้งต้นในลิ้นชัก (ตอนเปิดร้าน)<input type="number" id="cfloat" min="0" step="0.01" value="${float0 || ''}" placeholder="0" inputmode="decimal"></label>
+        <div class="p-split close-expect"><span>ควรมีเงินในลิ้นชัก</span><b class="mono" id="cexp"></b></div>
+        <label class="field">นับเงินได้จริง<input type="number" id="ccount" min="0" step="0.01" value="${saved?.counted ?? ''}" placeholder="นับเงินในลิ้นชักแล้วใส่ตรงนี้" inputmode="decimal" style="font-size:22px;font-weight:600;text-align:right;font-family:var(--mono)"></label>
+        <div class="change" id="cdiff"></div>
+        <label class="field">หมายเหตุ<input type="text" id="cnote" value="${esc(saved?.note || '')}" placeholder="เช่น ลูกค้าโอนเข้าบัญชี 500 บาท"></label>
+        <div class="err hidden" id="cerr"></div>
+        <div class="row"><button class="btn primary" id="csave">บันทึกปิดร้าน</button><button class="btn" id="cprint">พิมพ์ใบสรุป</button></div>
+      </div>
+      <div class="close-box">
+        <h3>ไม่เข้าลิ้นชัก</h3>
+        ${row(`ขายเงินเชื่อ (${s.creditBills.length} บิล)`, s.credit)}
+        <h3 style="margin-top:10px">แยกตามพนักงาน</h3>
+        <div class="scroll"><table><tr><th>ชื่อ</th><th class="num">ขายสด</th><th class="num">รับชำระ</th><th class="num">ขายเชื่อ</th></tr>
+        ${s.people.length ? s.people.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${money(p.cash)}</td><td class="num">${money(p.paid)}</td><td class="num">${money(p.credit)}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">ยังไม่มีรายการ</td></tr>'}</table></div>
+      </div>
+    </div>
+  </section>
+  <section class="card"><h2>รายการวันนี้</h2>
+    <div class="scroll"><table><tr><th>เลขที่</th><th>ประเภท</th><th>ลูกค้า</th><th>โดย</th><th class="num">ยอด</th></tr>
+    ${[...s.cashBills.map((b) => [b.no, 'ขายเงินสด', b]), ...s.receipts.map((r) => [r.no, 'รับชำระ', r]), ...s.creditBills.map((b) => [b.no, 'ขายเงินเชื่อ', b])].map(([no, t, x]) => `<tr><td class="mono">${esc(no)}</td><td>${t}</td><td>${esc(custLabel(x.customerCode))}</td><td>${esc(x.by || '')}</td><td class="num">${money(x.total)}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">ยังไม่มีรายการ</td></tr>'}</table></div>
+  </section>`;
+  const nums = () => { const f = Number($('#cfloat').value) || 0, c = $('#ccount').value === '' ? null : Number($('#ccount').value); const exp = round2(f + s.cashIn); return { f, c, exp, diff: c === null ? null : round2(c - exp) }; };
+  const draw = () => {
+    const { exp, diff } = nums();
+    $('#cexp').textContent = money(exp);
+    const d = $('#cdiff');
+    if (diff === null) { d.className = 'change'; d.innerHTML = ''; return; }
+    d.className = 'change ' + (diff === 0 ? 'ok' : diff < 0 ? 'short' : 'over');
+    d.innerHTML = diff === 0 ? '<span>เงินตรง</span><b class="mono">0.00</b>' : diff < 0 ? `<span>เงินขาด</span><b class="mono">${money(-diff)}</b>` : `<span>เงินเกิน</span><b class="mono">${money(diff)}</b>`;
+  };
+  ['#cfloat', '#ccount'].forEach((id) => $(id).addEventListener('input', draw)); draw();
+  $('#cdate').addEventListener('change', (e) => { location.hash = 'close/' + e.target.value; });
+  const printClose = (rec) => {
+    const html = `<div class="paper">
+      ${paperHead('สรุปปิดร้านประจำวัน', `<div>วันที่ ${dd(date)}</div>`)}
+      <div class="p-box"><div class="p-cell" style="flex:1">
+        ${row('ขายเงินสด (' + s.cashBills.length + ' บิล)', s.cash)}${row('รับชำระหนี้ (' + s.receipts.length + ' ใบ)', s.paid)}${row('เงินทอนตั้งต้น', rec.float)}
+        ${row('ควรมีเงินในลิ้นชัก', rec.expected, 'p-grand')}${row('นับได้จริง', rec.counted ?? 0)}
+        <div class="p-split p-grand"><span>${rec.diff === 0 ? 'เงินตรง' : rec.diff < 0 ? 'เงินขาด' : 'เงินเกิน'}</span><span>${money(Math.abs(rec.diff || 0))}</span></div>
+      </div><div class="p-cell p-side">
+        ${row('ขายเงินเชื่อ (' + s.creditBills.length + ' บิล)', s.credit)}
+        ${s.people.map((p) => `<div class="p-split"><span>${esc(p.name)}</span><span>สด ${money(p.cash)} · รับ ${money(p.paid)}</span></div>`).join('')}
+        ${rec.note ? `<div><b>หมายเหตุ</b> ${esc(rec.note)}</div>` : ''}
+      </div></div>
+      <div class="p-sign two"><div>ผู้ปิดร้าน (${esc(user.name)})</div><div>เจ้าของร้าน</div></div>
+    </div>`;
+    doPrint(html);
+  };
+  const record = () => { const { f, c, exp, diff } = nums(); return { date, float: f, cash: s.cash, paid: s.paid, credit: s.credit, expected: exp, counted: c, diff, note: $('#cnote').value.trim(), bills: s.cashBills.length + s.creditBills.length, receipts: s.receipts.length }; };
+  $('#csave').addEventListener('click', async () => {
+    const rec = record();
+    if (rec.counted === null) { $('#cerr').textContent = 'นับเงินในลิ้นชักแล้วใส่ "นับเงินได้จริง" ก่อน'; $('#cerr').classList.remove('hidden'); return; }
+    const btn = $('#csave'); btn.disabled = true;
+    try { await backend.saveClose(shopId, rec); lsSet(floatKey, String(rec.float)); toast('บันทึกปิดร้านแล้ว'); printClose(rec); viewClose(date); }
+    catch (e) { $('#cerr').textContent = e.message; $('#cerr').classList.remove('hidden'); btn.disabled = false; }
+  });
+  $('#cprint').addEventListener('click', () => printClose(record()));
 }
 
 // ---------------- stock: count / adjust and transfer to other shops ----------------
@@ -1387,7 +1616,7 @@ function productForm(p) {
 }
 function viewProducts() {
   view.innerHTML = `<section class="card">
-    <div class="row" style="justify-content:space-between"><h2>สินค้า (${liveProducts().length})</h2><button class="btn primary" id="addp">+ เพิ่มสินค้า</button></div>
+    <div class="row" style="justify-content:space-between"><h2>สินค้า (${liveProducts().length})</h2><span class="row">${isManager() ? '<a class="btn" href="#prices">ปรับราคาหลายรายการ</a>' : ''}<button class="btn primary" id="addp">+ เพิ่มสินค้า</button></span></div>
     <div class="row"><input type="search" id="pq2" placeholder="ค้นหาชื่อสินค้า" style="flex:1;min-width:220px" autocomplete="off">
       <select id="pf"><option value="">ทั้งหมด</option><option value="neg">สต๊อกติดลบ</option><option value="noprice">ยังไม่มีราคา</option><option value="service">ไม่มีสต๊อก (บริการ)</option></select></div>
     <div class="scroll"><table id="ptab"></table></div>
@@ -1404,6 +1633,63 @@ function viewProducts() {
   $('#ptab').addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) productForm(liveProducts().find((p) => p.code === b.dataset.e)); });
   $('#addp').addEventListener('click', () => productForm());
   draw(); $('#pq2').focus();
+}
+
+// ---------------- change many prices at once (owner) ----------------
+let priceSel = new Set();
+function viewPrices() {
+  if (!isManager()) { location.hash = 'products'; return; }
+  view.innerHTML = `<div><a href="#products" class="btn small">← สินค้า</a></div>
+  <section class="card">
+    <h2>ปรับราคาหลายรายการ</h2>
+    <div class="price-rule">
+      <label class="field">ปรับแบบ<select id="pmode"><option value="add">เพิ่มขึ้น (บาท)</option><option value="sub">ลดลง (บาท)</option><option value="pct">เพิ่มขึ้น (%)</option><option value="pctdown">ลดลง (%)</option><option value="set">ตั้งราคาเป็น (บาท)</option></select></label>
+      <label class="field">จำนวน<input type="number" id="pval" min="0" step="0.01" inputmode="decimal" placeholder="เช่น 30" style="font-size:20px;font-family:var(--mono)"></label>
+      <label class="field">ปัดเศษ<select id="pround"><option value="0">ไม่ปัด</option><option value="1">ปัดขึ้นเป็นบาท</option><option value="5">ปัดขึ้นทีละ 5 บาท</option><option value="10">ปัดขึ้นทีละ 10 บาท</option></select></label>
+    </div>
+    <div class="row"><input type="search" id="psq" placeholder="ค้นหาสินค้าที่จะปรับ เช่น ปุ๋ย" style="flex:1;min-width:200px" autocomplete="off">
+      <button class="btn small" id="pall">เลือกทั้งหมดที่แสดง</button><button class="btn small" id="pnone">ไม่เลือกเลย</button></div>
+    <div class="scroll"><table id="ptbl"></table></div>
+    <div class="row" style="justify-content:space-between;position:sticky;bottom:0;background:var(--card);padding:10px 0"><b id="psum"></b><button class="btn primary" id="papply">ปรับราคา</button></div>
+  </section>`;
+  const rule = () => ({ mode: $('#pmode').value, v: Number($('#pval').value), step: Number($('#pround').value) });
+  const calc = (price, r) => {
+    if (!(r.v >= 0) || $('#pval').value === '') return null;
+    let n = r.mode === 'add' ? price + r.v : r.mode === 'sub' ? price - r.v : r.mode === 'pct' ? price * (1 + r.v / 100) : r.mode === 'pctdown' ? price * (1 - r.v / 100) : r.v;
+    if (r.step) n = Math.ceil(n / r.step - 1e-9) * r.step;
+    return Math.max(0, round2(n));
+  };
+  const shown = () => { const q = norm($('#psq').value); return liveProducts().filter((p) => !q || norm(p.name).includes(q) || p.code.startsWith($('#psq').value.trim())).sort((a, b) => a.name.localeCompare(b.name, 'th')); };
+  const draw = () => {
+    const r = rule(), list = shown();
+    $('#ptbl').innerHTML = `<tr><th style="width:36px"></th><th>สินค้า</th><th>หน่วย</th><th class="num">ราคาเดิม</th><th class="num">ราคาใหม่</th></tr>` + list.slice(0, 400).map((p) => {
+      const on = priceSel.has(p.code), n = on && (p.price > 0 || r.mode === 'set') ? calc(p.price || 0, r) : null;
+      return `<tr class="clickable" data-c="${esc(p.code)}"><td><input type="checkbox" ${on ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)" tabindex="-1"></td><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td class="num">${money(p.price || 0)}</td><td class="num">${n === null ? '' : `<b style="color:${n > (p.price || 0) ? 'var(--orange-ink)' : n < (p.price || 0) ? 'var(--green)' : 'inherit'}">${money(n)}</b>`}</td></tr>`;
+    }).join('');
+    $('#psum').textContent = `เลือกแล้ว ${priceSel.size} รายการ`;
+  };
+  $('#ptbl').addEventListener('click', (e) => { const tr = e.target.closest('[data-c]'); if (!tr) return; const c = tr.dataset.c; priceSel.has(c) ? priceSel.delete(c) : priceSel.add(c); draw(); });
+  $('#pall').addEventListener('click', () => { shown().forEach((p) => priceSel.add(p.code)); draw(); });
+  $('#pnone').addEventListener('click', () => { priceSel.clear(); draw(); });
+  ['#pmode', '#pval', '#pround', '#psq'].forEach((id) => $(id).addEventListener('input', draw));
+  $('#papply').addEventListener('click', () => {
+    const r = rule();
+    // products without a price are only changed by "ตั้งราคาเป็น" (adding to 0 makes no sense)
+    const changes = liveProducts().filter((p) => priceSel.has(p.code) && (p.price > 0 || r.mode === 'set')).map((p) => ({ code: p.code, name: p.name, old: p.price || 0, price: calc(p.price || 0, r) })).filter((x) => x.price !== null && x.price !== x.old);
+    if (!priceSel.size) { toast('ยังไม่ได้เลือกสินค้า'); return; }
+    if ($('#pval').value === '') { toast('ใส่จำนวนที่จะปรับ'); $('#pval').focus(); return; }
+    if (!changes.length) { toast('ราคาไม่เปลี่ยน'); return; }
+    const desc = `${$('#pmode').selectedOptions[0].text} ${r.v}${r.step ? ' · ' + $('#pround').selectedOptions[0].text : ''}`;
+    openDialog(`<h2>ยืนยันปรับราคา ${changes.length} รายการ</h2><div>${esc(desc)}</div>
+      <div class="scroll" style="max-height:260px"><table>${changes.slice(0, 50).map((x) => `<tr><td>${esc(x.name)}</td><td class="num">${money(x.old)} → <b>${money(x.price)}</b></td></tr>`).join('')}${changes.length > 50 ? `<tr><td colspan="2" class="muted">และอีก ${changes.length - 50} รายการ</td></tr>` : ''}</table></div>
+      <div class="muted" style="font-size:13px">บิลเก่าไม่เปลี่ยน ราคาใหม่ใช้กับบิลที่ขายหลังจากนี้ · บันทึกไว้ในประวัติการแก้ไข</div>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn primary" value="ok">ปรับราคา</button><button class="btn" value="cancel">ยกเลิก</button></div>`, async () => {
+      await backend.setPrices(shopId, changes, desc);
+      toast(`ปรับราคาแล้ว ${changes.length} รายการ`); priceSel.clear(); setTimeout(viewPrices, 0);
+    });
+  });
+  draw(); $('#psq').focus();
 }
 
 // ---------------- staff codes ----------------

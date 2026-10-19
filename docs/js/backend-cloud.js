@@ -118,8 +118,9 @@ export async function createShop({ label }) {
 let unsubs = [];
 let data = null;
 export function closeShop() { unsubs.forEach((u) => u()); unsubs = []; data = null; }
+let currentShop = null;
 export async function openShop(shopId, onChange) {
-  closeShop();
+  closeShop(); currentShop = shopId;
   data = { customers: [], products: [], bills: [], receipts: [], requests: [], transfers: [] };
   const settingsBox = { value: { ...DEFAULT_SETTINGS } };
   const maps = { customers: new Map(), products: new Map(), billsOpen: new Map(), billsRecent: new Map(), receipts: new Map(), requests: new Map(), transfers: new Map() };
@@ -162,6 +163,18 @@ export async function openShop(shopId, onChange) {
   rebuild(); ready = true;
   return { data, get settings() { return settingsBox.value; } };
 }
+
+// ---------- end-of-day close ----------
+export async function saveClose(shopId, rec) {
+  needOnline('บันทึกปิดร้าน');
+  const ref = sub(shopId, 'closes', rec.date);
+  const old = await wrap(() => fb.getDoc(ref));
+  const prev = old.exists() ? old.data() : null;
+  const out = { ...rec, by: me.name, at: new Date().toISOString(), history: [...(prev?.history || []), ...(prev ? [{ by: prev.by, at: prev.at, counted: prev.counted, diff: prev.diff }] : [])].slice(-10) };
+  await wrap(() => fb.setDoc(ref, out));
+  return out;
+}
+export async function getClose(shopId, date) { const d = await wrap(() => fb.getDoc(sub(shopId, 'closes', date))); return d.exists() ? d.data() : null; }
 
 export async function saveSettings(shopId, s) {
   const { id, ...rest } = s;
@@ -302,6 +315,31 @@ export async function setMinStock(shopId, codes, minStock) {
     codes.slice(i, i + 400).forEach((code) => b.set(sub(shopId, 'products', code), { minStock: Number(minStock) || 0, minStockBy: me.name }, { merge: true }));
     await wrap(() => b.commit());
   }
+}
+// ---------- reports: everything dated within a range (any shop the person can open) ----------
+export async function findRange(shopId, from, to) {
+  const q = (c) => fb.getDocs(fb.query(sub(shopId, c), fb.where('date', '>=', from), fb.where('date', '<=', to)));
+  const [b, r] = await wrap(() => withTimeout(Promise.all([q('bills'), q('receipts')]), 120000, 'อ่านข้อมูลรายงาน'));
+  return { bills: b.docs.map((d) => d.data()), receipts: r.docs.map((d) => d.data()) };
+}
+export async function shopProducts(shopId) {
+  if (shopId === currentShop && data) return data.products;
+  const s = await wrap(() => fb.getDocs(sub(shopId, 'products')));
+  return s.docs.map((d) => d.data());
+}
+
+// ---------- who did what (audit log) ----------
+export function addLog(shopId, entry) {
+  fb.setDoc(fb.doc(sub(shopId, 'logs')), { ...entry, by: me?.name || '', byUid: me?.uid || '', at: new Date().toISOString() }).catch((e) => console.warn('log failed', e));
+}
+export async function listLogs(shopId, max = 500) {
+  const s = await wrap(() => fb.getDocs(fb.query(sub(shopId, 'logs'), fb.orderBy('at', 'desc'), fb.limit(max))));
+  return s.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+// Many prices at once (one batch per 400 products).
+export async function setPrices(shopId, changes) {
+  needOnline('ปรับราคา');
+  await commitInBatches(changes.map(({ code, price }) => (b) => b.set(sub(shopId, 'products', code), { price, priceFromHistory: false, updatedBy: me.name }, { merge: true })));
 }
 export async function saveProduct(shopId, p) { await wrap(() => fb.setDoc(sub(shopId, 'products', p.code), p, { merge: true })); }
 
@@ -486,7 +524,7 @@ export async function resolveRequest(shopId, id, approve, meta) {
 }
 
 // ---------- backup / restore / delete a whole shop ----------
-export const SHOP_COLLECTIONS = ['customers', 'products', 'bills', 'receipts', 'requests', 'counters', 'transfers', 'stockLogs'];
+export const SHOP_COLLECTIONS = ['customers', 'products', 'bills', 'receipts', 'requests', 'counters', 'transfers', 'stockLogs', 'closes', 'logs'];
 const BATCH_SIZE = 400;
 async function commitInBatches(ops, onStep) {
   for (let i = 0; i < ops.length; i += BATCH_SIZE) {

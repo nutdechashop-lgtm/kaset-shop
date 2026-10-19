@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { salesReport, closeSummary, stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -164,5 +164,25 @@ assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', s
   // paying updates the customer's last payment date
   receivePayment(sd, settings, { customerCode: 'a', date: '2026-10-19', mode: 'amount', amount: 10 });
   assert.equal(sd.customers[0].lastPaidAt, '2026-10-19');
+}
+{
+  const cd = { bills: [{ no: 'a', date: '2026-10-19', type: 'cash', total: 100, by: 'A', status: 'paid' }, { no: 'b', date: '2026-10-19', type: 'credit', total: 300, by: 'B', status: 'open' }, { no: 'c', date: '2026-10-19', type: 'cash', total: 50, by: 'A', status: 'cancelled' }],
+    receipts: [{ no: 'r', date: '2026-10-19', total: 70, totalPrincipal: 60, totalInterest: 10, by: 'B' }, { no: 'v', date: '2026-10-19', total: 999, status: 'void', by: 'B' }] };
+  const cs = closeSummary(cd, '2026-10-19');
+  assert.equal(cs.cash, 100); assert.equal(cs.credit, 300); assert.equal(cs.paid, 70); assert.equal(cs.cashIn, 170); assert.equal(cs.paidInterest, 10);
+  assert.deepEqual(cs.people.find((p) => p.name === 'B'), { name: 'B', cash: 0, paid: 70, credit: 300 });
+}
+{
+  const prods = [{ code: 'p', name: 'ปุ๋ย', unit: 'ถุง', cost: 80 }, { code: 'q', name: 'ยา', unit: 'ขวด' }];
+  const bills = [{ no: '1', date: '2026-10-01', type: 'cash', status: 'paid', subtotal: 300, discount: 30, total: 270, lines: [{ code: 'p', qty: 2, amount: 200 }, { code: 'q', qty: 1, amount: 100 }] },
+                 { no: '2', date: '2026-10-02', type: 'credit', status: 'open', subtotal: 100, discount: 0, total: 100, lines: [{ code: 'p', qty: 1, amount: 100 }] },
+                 { no: '3', date: '2026-10-02', type: 'cash', status: 'cancelled', subtotal: 999, total: 999, lines: [] }];
+  const rcp = [{ date: '2026-10-02', total: 120, totalPrincipal: 100, totalInterest: 20 }, { date: '2026-10-02', total: 50 }];
+  const rep = salesReport(bills, rcp, prods, '2026-10-01', '2026-10-31');
+  assert.equal(rep.totals.sales, 370); assert.equal(rep.totals.cash, 270); assert.equal(rep.totals.bills, 2);
+  // bill1: costed 200 → gross 40, discount 30 × 200/300 = 20 → 20; bill2: 20 → 40
+  assert.equal(rep.totals.profit, 40); assert.equal(rep.totals.noCostLines, 1);
+  assert.equal(rep.paid.interest, 20); assert.equal(rep.paid.noSplit, 1); assert.equal(rep.items[0].code, 'p'); assert.equal(rep.items[0].qty, 3);
+  assert.equal(rep.monthly[0].profit, 40);
 }
 console.log('ALL SHOP CHECKS PASSED');
