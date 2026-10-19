@@ -118,7 +118,7 @@ export async function exportShop() {
   const settings = await getSettings(DEFAULT_SETTINGS);
   const { id, ...s } = settings;
   const asDocs = (arr, key) => (arr || []).map((x) => ({ id: x[key] ?? x.id, data: x }));
-  return { format: 'nutdechashop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: USER.name, shopId: 'local', settings: s,
+  return { format: 'dreamshop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: USER.name, shopId: 'local', settings: s,
     collections: { customers: asDocs(d.customers, 'code'), products: asDocs(d.products, 'code'), bills: asDocs(d.bills, 'no'), receipts: asDocs(d.receipts, 'no'), requests: asDocs(d.requests, 'id'), counters: [], transfers: asDocs(d.transfers, 'no'), stockLogs: asDocs(d.stockLogs, 'at') } };
 }
 export async function restoreShop(shopId, backup, onProgress) {

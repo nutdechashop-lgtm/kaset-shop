@@ -19,7 +19,7 @@ const thDate = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-');
 const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
-const APP_NAME = 'NUTDECHASHOP_KASET';
+const APP_NAME = 'DREAMSHOP_KASET';
 const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'พนักงาน' };
 // The super-admin can preview the program as an owner / staff member sees it (to check before a shop goes live).
 let viewAs = lsGetSafe('viewAs') || '';
@@ -110,7 +110,7 @@ async function viewLogin() {
   drawHeader();
   const firstRun = await backend.bootstrapNeeded();
   view.innerHTML = `<section class="card" style="max-width:420px;margin:24px auto;width:100%">
-    <div class="app-title">${APP_NAME}</div>
+    <img src="icons/logo.png" alt="${APP_NAME}" class="login-logo" width="132" height="132"><div class="app-title">${APP_NAME}</div>
     ${firstRun ? `<h2>ตั้งค่าครั้งแรก: สร้างรหัสแอดมินใหญ่</h2>
       <div class="muted" style="font-size:14px">ทำครั้งเดียว รหัสนี้เห็นทุกร้าน และใช้สร้างรหัสให้เจ้าของร้านและพนักงาน</div>` : '<h2>เข้าสู่ระบบ</h2>'}
     <form id="lf" style="display:flex;flex-direction:column;gap:12px">
@@ -1575,7 +1575,7 @@ async function viewBackup() {
   $('#rsFile').addEventListener('change', async (e) => {
     const file = e.target.files[0]; if (!file) return;
     let bk;
-    try { bk = JSON.parse(await file.text()); if (bk.format !== 'nutdechashop-kaset-backup') throw new Error(); }
+    try { bk = JSON.parse(await file.text()); if (!['dreamshop-kaset-backup', 'nutdechashop-kaset-backup'].includes(bk.format)) throw new Error(); }
     catch { $('#rsInfo').innerHTML = '<div class="err">ไฟล์นี้ไม่ใช่ไฟล์สำรองของโปรแกรมนี้</div>'; return; }
     const n = (k) => bk.collections?.[k]?.length || 0;
     const other = bk.shopId !== shopId && backend.mode === 'cloud';

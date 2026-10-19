@@ -360,7 +360,7 @@ export async function exportShop(shopId) {
     collections[c] = snap.docs.map((d) => ({ id: d.id, data: d.data() }));
   }
   const { createdAt, ...settings } = s.data();
-  return { format: 'nutdechashop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: me.name, shopId, settings, collections };
+  return { format: 'dreamshop-kaset-backup', version: 1, exportedAt: new Date().toISOString(), exportedBy: me.name, shopId, settings, collections };
 }
 async function wipeShop(shopId, onStep) {
   const refs = [];

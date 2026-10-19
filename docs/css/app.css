@@ -213,3 +213,8 @@ tr.void-row td:not(:last-child) { color: var(--muted, #8a8f86); text-decoration:
 .alert-feed a { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 10px; text-decoration: none; color: var(--ink); border-left: 4px solid var(--orange); background: var(--orange-soft); font-size: 14px; }
 .alert-feed a.req { border-left-color: var(--green); background: var(--green-soft); }
 .alert-feed a b { font-size: 13px; }
+
+.brand { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hdr-logo { width: 38px; height: 38px; border-radius: 50%; background: #fff; flex: none; box-shadow: 0 0 0 2px rgba(255,255,255,.25); }
+.login-logo { display: block; width: 132px; height: 132px; margin: 0 auto 4px; border-radius: 50%; }
+.login-logo + .app-title { text-align: center; }
