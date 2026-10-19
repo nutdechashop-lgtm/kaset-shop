@@ -206,8 +206,8 @@ function doPrint(html, a4) {
     .then(() => document.fonts?.ready);
   Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => setTimeout(() => window.print(), 80));
 }
-const printModeField = () => `<label class="row muted" style="font-size:13px;gap:6px;min-height:32px"><input type="checkbox" data-a5mode ${rotateA5() ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--green)"> เครื่องพิมพ์ป้อนกระดาษ A5 แนวตั้ง (หมุนบิลให้อัตโนมัติ)</label>`;
-document.addEventListener('change', (e) => { if (e.target.matches?.('[data-a5mode]')) lsSet('printA5Mode', e.target.checked ? 'rotate' : 'landscape'); });
+const printModeField = () => `<label class="row muted" style="font-size:13px;gap:6px;min-height:32px">ใส่กระดาษ A5 แบบ <select data-a5mode style="min-height:34px;font-size:13px"><option value="rotate" ${rotateA5() ? 'selected' : ''}>แนวตั้ง (ด้านสั้นเข้าเครื่อง)</option><option value="landscape" ${rotateA5() ? '' : 'selected'}>แนวนอน (ด้านยาวเข้าเครื่อง)</option></select></label>`;
+document.addEventListener('change', (e) => { if (e.target.matches?.('[data-a5mode]')) lsSet('printA5Mode', e.target.value); });
 const dt = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + 543} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const dd = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${+y + 543}`; };
 function paperHead(title, right) {
