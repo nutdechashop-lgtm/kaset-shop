@@ -93,13 +93,20 @@ dialog h2 { margin: 0; font-size: 19px; }
 
 /* ---------- printing (bills A5 landscape, A4 when long) ---------- */
 #printArea { display: none; }
-@page { size: A5 landscape; margin: 7mm 8mm; }
-@page a4 { size: A4 portrait; margin: 10mm; }
+/* Page margins are 0 so the browser never prints its own header/footer (title, page number);
+   the white border is padding inside the page instead. */
+@page { size: A5 landscape; margin: 0; }
+@page a4 { size: A4 portrait; margin: 0; }
+@page a5rot { size: 148mm 210mm; margin: 0; }
 @media print {
   body > *:not(#printArea) { display: none !important; }
-  html, body { background: #fff !important; }
-  #printArea { display: block; }
-  #printArea.a4 { page: a4; }
+  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+  #printArea { display: block; box-sizing: border-box; padding: 7mm 8mm; }
+  #printArea.a4 { page: a4; padding: 10mm; }
+  /* A5 printers that feed the sheet upright: the page is portrait, the bill is turned 90° on it,
+     so it still reads landscape and nothing is cut off. */
+  #printArea.rot { page: a5rot; padding: 0; width: 148mm; height: 210mm; overflow: hidden; }
+  #printArea.rot .rot-wrap { box-sizing: border-box; width: 210mm; height: 148mm; padding: 7mm 8mm; transform-origin: 0 0; transform: translateX(148mm) rotate(90deg); }
 }
 .paper { font-family: 'Sarabun', 'IBM Plex Sans Thai', sans-serif; font-size: 12px; line-height: 1.4; color: #000; background: #fff; display: flex; flex-direction: column; gap: 2.2mm; height: 133mm; }
 #printArea.a4 .paper { height: 276mm; }

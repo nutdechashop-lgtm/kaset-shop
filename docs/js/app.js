@@ -193,12 +193,21 @@ async function enterShop(id) {
 function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
 
 // ---------------- printing (same layout as the old program's bills: A5 landscape, A4 when long) ----------------
+// A5 bills print on an upright (portrait) A5 sheet with the bill turned sideways, unless this computer's
+// printer was set to take A5 landscape directly. Remembered per computer.
+const rotateA5 = () => lsGet('printA5Mode') !== 'landscape';
 function doPrint(html, a4) {
   const area = $('#printArea');
-  area.className = a4 ? 'a4' : '';
-  area.innerHTML = html;
-  setTimeout(() => window.print(), 80);
+  const rot = !a4 && rotateA5();
+  area.className = a4 ? 'a4' : rot ? 'rot' : '';
+  area.innerHTML = rot ? `<div class="rot-wrap">${html}</div>` : html;
+  // The bill font loads only when first used; printing before it arrives gives blank text.
+  const fontsReady = Promise.all(['12px Sarabun', 'bold 12px Sarabun'].map((f) => document.fonts?.load(f, 'ใบเสร็จ ABC 0123456789').catch(() => null)))
+    .then(() => document.fonts?.ready);
+  Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => setTimeout(() => window.print(), 80));
 }
+const printModeField = () => `<label class="row muted" style="font-size:13px;gap:6px;min-height:32px"><input type="checkbox" data-a5mode ${rotateA5() ? 'checked' : ''} style="width:18px;height:18px;accent-color:var(--green)"> เครื่องพิมพ์ป้อนกระดาษ A5 แนวตั้ง (หมุนบิลให้อัตโนมัติ)</label>`;
+document.addEventListener('change', (e) => { if (e.target.matches?.('[data-a5mode]')) lsSet('printA5Mode', e.target.checked ? 'rotate' : 'landscape'); });
 const dt = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + 543} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const dd = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${+y + 543}`; };
 function paperHead(title, right) {
@@ -457,7 +466,7 @@ function viewSale() {
       <div>เลขที่ <b class="mono">${esc(bill.no)}</b> · ${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'} · <b>฿${money(bill.total)}</b></div>
       <div class="muted">${esc(custLabel(bill.customerCode))}</div>
       ${recv ? `<div class="change ok big"><span>รับ ${money(recv)} · ทอน</span><b class="mono">${money(recv - bill.total)}</b></div>` : ''}
-      <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
+      ${printModeField()}<div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
   });
   drawLines();
   pq.focus();
@@ -589,7 +598,7 @@ function viewDebtor(code) {
       <div>ใบเสร็จ <b class="mono">${esc(r.no)}</b></div>
       <div>เงินต้น ${money(r.totalPrincipal)} + ดอกเบี้ย ${money(r.totalInterest)} = <b>฿${money(r.total)}</b></div>
       ${r.change > 0 ? `<div class="note">เงินทอน ฿${money(r.change)}</div>` : ''}
-      <div class="row"><button class="btn primary" value="print">พิมพ์ใบเสร็จ</button><button class="btn" value="cancel">ปิด</button></div>`, () => { printReceipt(r); });
+      ${printModeField()}<div class="row"><button class="btn primary" value="print">พิมพ์ใบเสร็จ</button><button class="btn" value="cancel">ปิด</button></div>`, () => { printReceipt(r); });
   });
 }
 
@@ -611,6 +620,7 @@ function showBill(b) {
     ${b.status === 'cancelled' ? `<div class="err">ยกเลิกโดย ${esc(b.cancelledBy || '')}${b.cancelReason ? ' · ' + esc(b.cancelReason) : ''}</div>` : ''}
     ${pend ? '<div class="note">มีคำขอแก้ไข/ยกเลิกบิลนี้รอเจ้าของอนุมัติอยู่</div>' : ''}
     ${lock && b.status !== 'cancelled' ? `<div class="muted" style="font-size:13px">${esc(lock)}</div>` : ''}
+    ${printModeField()}
     <div class="row" style="justify-content:space-between">
       <span class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ปิด</button></span>
       ${!lock && !pend ? `<span class="row">${isManager()
