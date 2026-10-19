@@ -176,7 +176,9 @@ export async function commitSale(shopId, settings, input) {
   return wrap(() => fb.runTransaction(db, async (tx) => {
     const cref = sub(shopId, 'counters', head);
     const cs = await tx.get(cref);
-    const n = Math.max(cs.exists() ? cs.data().n : 0, localMax) + 1;
+    let n = Math.max(cs.exists() ? cs.data().n : 0, localMax) + 1;
+    // A day may already have bills (e.g. imported from the old program, which left no counter): skip used numbers.
+    for (let tries = 0; tries < 300 && (await tx.get(sub(shopId, 'bills', head + String(n).padStart(4, '0')))).exists(); tries++) n++;
     const no = head + String(n).padStart(4, '0');
     const scratch = { customers: data.customers, products: data.products.map((p) => ({ ...p })), bills: [], receipts: [] };
     const bill = createSale(scratch, settings, { ...input, date, by: me.name }, { no });

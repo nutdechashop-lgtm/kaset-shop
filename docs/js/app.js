@@ -2,7 +2,7 @@
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
 import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers } from './shop.js';
-import { round2, allocatePayment, billBalance, daysBetween, interestStart } from './interest.js';
+import { round2, allocatePayment, billBalance, daysBetween, interestStart, addDays } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
 const backend = await import(new URLSearchParams(location.search).has('local') ? './backend-local.js' : './backend-cloud.js');
@@ -235,7 +235,7 @@ function printBill(bill) {
   const html = `<div class="paper">
     ${paperHead('ใบส่งสินค้า / ใบแจ้งหนี้',
       `${bill.edits ? `<div class="p-edit">แก้ไขครั้งที่ ${bill.edits}${lastEdit?.at ? ' · ' + dt(lastEdit.at).slice(0, 16) : ''}</div>` : ''}
-       <div>${bill.edits ? 'วันที่ออกบิล' : 'วันที่'} ${bill.createdAt ? dt(bill.createdAt) : dd(bill.date)}</div>`)}
+       <div>${bill.edits ? 'วันที่ออกบิล' : 'วันที่'} ${bill.createdAt && bill.createdAt.slice(0, 10) <= bill.date ? dt(bill.createdAt) : dd(bill.date)}</div>`)}
     ${custBox(bill.customerCode, `<div class="p-split"><span><b>เลขที่</b> ${esc(bill.no)}</span><b>${bill.type === 'credit' ? 'เงินเชื่อ' : 'เงินสด'}</b></div>
        <div><b>พนักงานขาย</b> ${esc(bill.by || '-')}</div>`)}
     <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>รายการ</th><th style="width:22mm">จำนวน</th><th class="r" style="width:20mm">ราคา</th><th class="r" style="width:16mm">ส่วนลด</th><th class="r" style="width:24mm">จำนวนเงิน</th></tr></thead>
@@ -292,8 +292,8 @@ function openDialog(html, onSubmit) {
 }
 
 // ---------------- sale ----------------
-const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0, received: 0 };
-function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0, received: 0 }); }
+const cart = { lines: [], type: 'cash', customerCode: '', rate: 2, grace: false, graceMonths: 4, discount: 0, received: 0, date: '' };
+function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCode: '', rate: settings?.defaultRate ?? 2, grace: false, graceMonths: settings?.defaultGraceMonths ?? 4, discount: 0, received: 0, date: '' }); }
 
 const liveProducts = () => data.products.filter((p) => !p.deleted);
 function searchProducts(q) {
@@ -335,6 +335,9 @@ function viewSale() {
         </label>
         <div class="muted" id="interestHint" style="font-size:14px"></div>
       </div>
+      <label class="field">วันที่ขาย <span class="muted" style="font-weight:400">(ลงย้อนหลังได้${isManager() ? '' : ' ไม่เกิน 7 วัน'})</span>
+        <input type="date" id="sdate" value="${cart.date || todayIso()}" max="${todayIso()}" ${isManager() ? '' : `min="${addDays(todayIso(), -7)}"`}></label>
+      <div id="backHint"></div>
       <label class="field">ส่วนลด (บาท)<input type="number" id="disc" min="0" step="0.01" value="${cart.discount || ''}" placeholder="0"></label>
       <div>
         <div class="total-box"><span>รวม</span><span class="mono" id="sub"></span></div>
@@ -455,6 +458,11 @@ function viewSale() {
   $('#grace')?.addEventListener('change', (e) => { cart.grace = e.target.checked; $('#graceMonths').disabled = !cart.grace; drawTotals(); });
   $('#graceMonths')?.addEventListener('change', (e) => { cart.graceMonths = Number(e.target.value); drawTotals(); });
   $('#disc').addEventListener('input', (e) => { cart.discount = Number(e.target.value) || 0; drawTotals(); });
+  const drawBack = () => { const d = cart.date; $('#backHint').innerHTML = d && d !== todayIso() ? `<div class="note" style="font-size:13px">ลงบิลย้อนหลังเป็นวันที่ <b>${thDate(d)}</b>${cart.type === 'credit' ? ' · ดอกเบี้ยเริ่มนับจากวันนั้น' : ''}</div>` : ''; };
+  $('#sdate').addEventListener('change', (e) => { const v = e.target.value; const min = e.target.min;
+    if (!v || v > todayIso() || (min && v < min)) { e.target.value = cart.date || todayIso(); toast(min && v < min ? 'พนักงานลงย้อนหลังได้ไม่เกิน 7 วัน' : 'ลงวันที่ล่วงหน้าไม่ได้'); return; }
+    cart.date = v === todayIso() ? '' : v; drawBack(); drawTotals(); });
+  drawBack();
   $('#recv')?.addEventListener('input', (e) => { cart.received = Number(e.target.value) || 0; $('#saleErr').classList.add('hidden'); drawTotals(); });
   $('#recv')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#save').click(); } });
   $('#quick')?.addEventListener('click', (e) => { const b = e.target.closest('[data-recv]'); if (!b) return; cart.received = Number(b.dataset.recv); $('#recv').value = cart.received; $('#saleErr').classList.add('hidden'); drawTotals(); });
@@ -467,7 +475,7 @@ function viewSale() {
     const btn = $('#save'); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> กำลังบันทึก…';
     let bill;
     try {
-      bill = await backend.commitSale(shopId, settings, { type: cart.type, customerCode: cart.customerCode, lines: cart.lines, discount: cart.discount, rate: cart.rate, graceMonths: cart.type === 'credit' && cart.grace ? cart.graceMonths : 0, by: user.name });
+      bill = await backend.commitSale(shopId, settings, { date: cart.date || todayIso(), type: cart.type, customerCode: cart.customerCode, lines: cart.lines, discount: cart.discount, rate: cart.rate, graceMonths: cart.type === 'credit' && cart.grace ? cart.graceMonths : 0, by: user.name });
     } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); btn.disabled = false; btn.textContent = 'บันทึกการขาย'; return; }
     resetCart(); viewSale();
     openDialog(`<h2>บันทึกการขายแล้ว</h2>
