@@ -2153,7 +2153,7 @@ function manageCategories(done) {
 function catChips(products, active, attr = 'data-cat-f') {
   const n = (c) => products.filter((p) => (c === NO_CAT ? !p.category || !cats().includes(p.category) && !p.category : p.category === c)).length;
   const none = products.filter((p) => !p.category).length;
-  return `<button type="button" class="chip" ${attr}="" aria-pressed="${!active}">ทุกหมวด ${products.length}</button>${cats().map((c) => `<button type="button" class="chip" ${attr}="${esc(c)}" aria-pressed="${active === c}">${esc(c)} <span class="muted">${n(c)}</span></button>`).join('')}${none ? `<button type="button" class="chip" ${attr}="${NO_CAT}" aria-pressed="${active === NO_CAT}">ยังไม่มีหมวด <span class="muted">${none}</span></button>` : ''}`;
+  return `<button type="button" class="chip" ${attr}="" aria-pressed="${!active}">ทุกหมวด ${products.length}</button>${cats().filter((c) => c === active || n(c) > 0).map((c) => `<button type="button" class="chip" ${attr}="${esc(c)}" aria-pressed="${active === c}">${esc(c)} <span class="muted">${n(c)}</span></button>`).join('')}${none ? `<button type="button" class="chip" ${attr}="${NO_CAT}" aria-pressed="${active === NO_CAT}">ยังไม่มีหมวด <span class="muted">${none}</span></button>` : ''}`;
 }
 // Keep each category together, in the shop's category order (no category last), then by name.
 const catRank = () => { const m = new Map(cats().map((c, i) => [c, i])); return (p) => (p.category && m.has(p.category) ? m.get(p.category) : 1e6); };
