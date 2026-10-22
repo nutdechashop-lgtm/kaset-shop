@@ -310,7 +310,7 @@ function printReceipt(r) {
     ${paperHead('ใบเสร็จรับเงิน', `<div>วันที่ ${r.createdAt ? dt(r.createdAt) : dd(r.date)}</div>`)}
     ${custBox(r.customerCode, `<div><b>เลขที่</b> ${esc(r.no)}</div><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(r.date)}</div><div><b>รับเงินโดย</b> ${esc(r.by || '-')}</div>`)}
     <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>บิลอ้างอิง</th><th style="width:28mm">วันที่บิล</th><th class="r" style="width:26mm">เงินต้น</th><th class="r" style="width:24mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>
-    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>${(() => { const it = x.items || billItems(data.bills.find((b) => b.no === x.no)); return it.length ? `<tr class="p-items"><td></td><td colspan="5">${it.map((l) => `${esc(l.name)} ${qtyFmt(l.qty)} ${esc(l.unit)} = ${money(l.amount)}`).join(' · ')}</td></tr>` : ''; })()}`).join('')}
+    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>${(() => { const it = x.items || billItems(data.bills.find((b) => b.no === x.no)); return it.length ? `<tr class="p-items"><td></td><td colspan="5"><table class="p-itab">${it.map((l, k) => `<tr><td class="c">${k + 1})</td><td>${esc(l.name)}</td><td class="r">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></td></tr>` : ''; })()}`).join('')}
       <tr class="p-foot"><td colspan="3" class="r">${r.owed ? 'รวมยอดค้าง' : 'รวม'}</td><td class="r">${money(sum('principal'))}</td><td class="r">${money(sum('interest'))}</td><td class="r">${money(owedTotal)}</td></tr></tbody></table>
     <div class="p-box p-sum">
       <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(r.total)})</div></div>
@@ -635,7 +635,7 @@ function viewDebt(code) {
 
 // What was bought on a bill, for showing beside debts and receipts.
 const billItems = (b) => (b?.lines || b?.items || []).map((l) => ({ name: l.name || data.products.find((p) => p.code === l.code)?.name || l.code, qty: l.qty, unit: l.unit || '', amount: l.amount }));
-const itemsHtml = (items) => (items.length ? `<div class="bill-items">${items.map((l) => `<span><b>${esc(l.name)}</b> ${qtyFmt(l.qty)} ${esc(l.unit)} <i class="mono">${money(l.amount)}</i></span>`).join('')}</div>` : '');
+const itemsHtml = (items) => (items.length ? `<div class="bill-items">${items.map((l) => `<div><span class="bi-name">${esc(l.name)}</span><span class="bi-qty">${qtyFmt(l.qty)} ${esc(l.unit)}</span><span class="bi-amt mono">${money(l.amount)}</span></div>`).join('')}</div>` : '');
 function viewDebtor(code) {
   const asOf = todayIso();
   const c = data.customers.find((x) => x.code === code);
@@ -688,7 +688,7 @@ function viewDebtor(code) {
         <td class="num">${graceLeft ? `<span class="pill">${graceLeft}</span>` : days}</td>
         <td class="num">${money(b.balance.principal)}</td><td class="num">${money(b.balance.interest)}</td><td class="num"><b>${money(b.balance.total)}</b></td>
         <td>${pendingRequests().some((r) => r.billNo === b.no && r.kind === 'rate') ? '<span class="pill">รออนุมัติ</span>' : `<button class="btn small" data-rate="${esc(b.no)}" title="เปลี่ยนอัตราดอก">เปลี่ยน %</button>`}</td></tr>
-        <tr class="items-row"><td></td><td colspan="8">${itemsHtml(billItems(b))}</td></tr>`;
+        <tr class="items-row"><td colspan="9">${itemsHtml(billItems(b))}</td></tr>`;
     }).join('');
   $$('[data-view]').forEach((x) => x.addEventListener('click', () => showBill(data.bills.find((b) => b.no === x.dataset.view))));
   $$('[data-rate]').forEach((x) => x.addEventListener('click', () => rateDialog(data.bills.find((b) => b.no === x.dataset.rate), () => viewDebtor(code))));

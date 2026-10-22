@@ -339,9 +339,26 @@ tr.mline.noprice { background: var(--orange-soft); }
 
 /* What was bought on each bill, shown with debts and receipts */
 .items-row td { border-top: 0 !important; padding-top: 0 !important; }
-.bill-items { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: #5C6158; padding: 2px 0 6px; }
-.bill-items b { font-weight: 600; color: #1C1F1A; }
-.bill-items i { font-style: normal; }
-#alloc .bill-items { font-size: 12px; padding: 2px 0 0; }
-.paper .p-items td { border-top: 0; padding-top: 0; font-size: 13px; color: #333; }
-@media (max-width: 700px) { .bill-items { font-size: 14px; flex-direction: column; gap: 2px; } }
+.bill-items { display: flex; flex-direction: column; gap: 2px; font-size: 14px; color: #3d423a; padding: 2px 0 8px 10px; margin-left: 52px; border-left: 3px solid #DDD9CE; max-width: 640px; }
+.bill-items > div { display: grid; grid-template-columns: minmax(0, 1fr) auto 90px; gap: 12px; align-items: baseline; }
+.bi-qty { color: #5C6158; white-space: nowrap; }
+.bi-amt { text-align: right; }
+#alloc .bill-items { font-size: 13px; margin: 4px 0 0; position: static; width: auto; }
+@media (max-width: 700px) {
+  .bill-items { position: sticky; left: 0; margin-left: 4px; width: calc(100vw - 90px); box-sizing: border-box; gap: 6px; font-size: 15px; }
+  .bill-items > div { grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+  .bi-name { grid-column: 1 / -1; font-weight: 600; }
+  .bi-qty { grid-column: 1; font-size: 14px; }
+  .bi-amt { grid-column: 2; }
+}
+.paper .p-items > td { border-top: 0; padding: 0 0 4px; }
+.paper .p-itab { width: 100%; border-collapse: collapse; font-size: 14px; }
+.paper .p-itab td { border: 0 !important; padding: 0 3px; line-height: 1.35; vertical-align: top; }
+.paper .p-itab td:first-child { width: 7mm; color: #555; }
+.paper .p-itab td:nth-child(3) { width: 14mm; }
+.paper .p-itab td:nth-child(4) { width: 18mm; }
+.paper .p-itab td:nth-child(5) { width: 26mm; }
+#alloc .bill-items > div { display: block; }
+#alloc .bi-name { font-weight: 600; }
+#alloc .bi-qty::before { content: ' × '; }
+#alloc .bi-amt { display: none; }
