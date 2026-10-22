@@ -487,3 +487,11 @@ tr.sel td { background: var(--green-soft); }
 .cat-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
 .cat-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
 .cat-name { flex: 1; min-width: 0; }
+
+/* a heading wherever the category changes */
+div.cat-head { font-size: 14px; font-weight: 700; color: var(--green); padding: 10px 2px 4px; display: flex; gap: 8px; align-items: baseline; }
+div.cat-head span { font-weight: 500; color: var(--muted); font-size: 13px; }
+.cat-head.ps { background: var(--line-soft); padding: 8px 14px; margin: 0; }
+.ps-card .cat-head.ps { margin: 0 -14px; }
+tr.cat-head td { background: var(--green-soft); color: var(--green); font-weight: 700; padding: 8px 10px; }
+tr.cat-head td span { font-weight: 500; color: var(--muted); font-size: 13px; margin-left: 6px; }

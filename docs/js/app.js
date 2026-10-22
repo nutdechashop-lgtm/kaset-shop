@@ -1524,8 +1524,8 @@ function stockCount() {
     $$('#stockBody [data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === stockF));
     const base = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!stockF || (stockF === 'neg' ? p.stock < 0 : isLow(p))));
     $('#scats').innerHTML = catChips(base, stockCat);
-    const list = base.filter((p) => inCat(p, stockCat)).sort((a, b) => a.name.localeCompare(b.name, 'th')).slice(0, 80);
-    $('#sl').innerHTML = list.length ? list.map((p) => `<button class="stock-item" data-c="${esc(p.code)}"><span><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}</span> ${minTag(p)}</span><span class="stock-n${p.stock < 0 ? ' neg' : isLow(p) ? ' low' : ''}">${qtyFmt(p.stock)}</span></button>`).join('')
+    const list = base.filter((p) => inCat(p, stockCat)).sort(byCatName()).slice(0, 80);
+    $('#sl').innerHTML = list.length ? catGroups(list, (p) => `<button class="stock-item" data-c="${esc(p.code)}"><span><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}</span> ${minTag(p)}</span><span class="stock-n${p.stock < 0 ? ' neg' : isLow(p) ? ' low' : ''}">${qtyFmt(p.stock)}</span></button>`, 'div')
       : `<div class="empty">${stockF === 'low' ? 'ไม่มีสินค้าใกล้หมด · ตั้งจุดเตือนได้ที่แท็บ "ตั้งเตือนใกล้หมด"' : 'ไม่พบสินค้า'}</div>`;
   };
   $('#sq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
@@ -1555,12 +1555,12 @@ function stockAlerts() {
   const draw = () => {
     $$('#stockBody [data-af]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.af === alertF));
     const all = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!alertF || (alertF === 'none' ? !(p.minStock > 0) : alertF === 'set' ? p.minStock > 0 : isLow(p))))
-      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+      .sort(byCatName());
     shown = all.slice(0, 80);
     $('#bulk').innerHTML = all.length > 1 ? `<span>ตั้งทั้ง <b>${all.length}</b> รายการที่แสดงอยู่เป็น</span><div class="row" style="gap:6px">${minButtons(-1, 'data-bulk')}</div>` : '';
     $$('#bulk [aria-pressed]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
-    $('#al').innerHTML = shown.length ? shown.map((p) => `<div class="alert-item"><div class="ai-name"><b>${esc(p.name)}</b><span class="muted"> · เหลือ <b class="mono${isLow(p) ? ' low-txt' : ''}">${qtyFmt(p.stock)}</b> ${esc(p.unit)}</span></div>
-      <div class="ai-btns" data-code="${esc(p.code)}">${minButtons(p.minStock, 'data-min')}</div></div>`).join('') + (all.length > shown.length ? `<div class="muted" style="font-size:13px">แสดง 80 จาก ${all.length} รายการ · พิมพ์ค้นหาเพื่อให้แคบลง</div>` : '')
+    $('#al').innerHTML = shown.length ? catGroups(shown, (p) => `<div class="alert-item"><div class="ai-name"><b>${esc(p.name)}</b><span class="muted"> · เหลือ <b class="mono${isLow(p) ? ' low-txt' : ''}">${qtyFmt(p.stock)}</b> ${esc(p.unit)}</span></div>
+      <div class="ai-btns" data-code="${esc(p.code)}">${minButtons(p.minStock, 'data-min')}</div></div>`, 'div') + (all.length > shown.length ? `<div class="muted" style="font-size:13px">แสดง 80 จาก ${all.length} รายการ · พิมพ์ค้นหาเพื่อให้แคบลง</div>` : '')
       : '<div class="empty">ไม่พบสินค้า</div>';
     $('#bulk').dataset.codes = all.map((p) => p.code).join('|');
   };
@@ -1709,10 +1709,10 @@ function stockPhone(arg) {
     $$('[data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === stockF));
     const base = all.filter((p) => stockMatch(p, stockQ) && (!stockF || (stockF === 'out' ? p.stock <= 0 : stockF === 'low' ? isLow(p) && p.stock > 0 : true)));
     $('#scats').innerHTML = catChips(base, stockCat);
-    const list = base.filter((p) => inCat(p, stockCat)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
-    $('#sl').innerHTML = list.length ? list.map((p) => { const r = rank(p); return `<button class="ps-row${r === 0 ? ' out' : r === 1 ? ' low' : ''}" data-c="${esc(p.code)}">
+    const cr = catRank(); const list = base.filter((p) => inCat(p, stockCat)).sort((a, b) => cr(a) - cr(b) || rank(a) - rank(b) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
+    $('#sl').innerHTML = list.length ? catGroups(list, (p) => { const r = rank(p); return `<button class="ps-row${r === 0 ? ' out' : r === 1 ? ' low' : ''}" data-c="${esc(p.code)}">
       <span class="ps-name"><b>${esc(p.name)}</b><small>${r === 0 ? 'หมดแล้ว · ' : r === 1 ? 'ใกล้หมด · ' : ''}${p.minStock > 0 ? `เตือนเมื่อไม่ถึง ${qtyFmt(p.minStock)}` : 'ยังไม่ตั้งเตือน'}</small></span>
-      <span class="ps-qty"><b class="mono">${qtyFmt(p.stock)}</b><small>${esc(p.unit)}</small></span></button>`; }).join('')
+      <span class="ps-qty"><b class="mono">${qtyFmt(p.stock)}</b><small>${esc(p.unit)}</small></span></button>`; }, 'ps')
       : `<div class="empty">${stockF ? 'ไม่มีสินค้าในกลุ่มนี้' : 'ไม่พบสินค้า'}</div>`;
   };
   $('#sq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
@@ -1847,9 +1847,9 @@ function stockAlertPhone() {
       .map(([k, t, n]) => `<button class="chip" data-af="${k}" aria-pressed="${alertF === k}">${t} ${n}</button>`).join('');
     const base = a.filter((p) => stockMatch(p, stockQ) && (alertF === 'none' ? !(p.minStock > 0) : alertF === 'set' ? p.minStock > 0 : true));
     $('#acats').innerHTML = catChips(base, stockCat);
-    shown = base.filter((p) => inCat(p, stockCat)).sort((x, y) => x.name.localeCompare(y.name, 'th')).slice(0, 100);
-    $('#alist').innerHTML = shown.length ? shown.map((p) => `<div class="ps-arow${picked.has(p.code) ? ' on' : ''}"><label><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''}><span class="ps-name"><b>${esc(p.name)}</b><small class="${isLow(p) ? 'low-txt' : ''}">เหลือ ${qtyFmt(p.stock)} ${esc(p.unit)}${isLow(p) ? ' · ใกล้หมดแล้ว' : ''}</small></span></label>
-      <button type="button" class="ps-minpill${p.minStock > 0 ? ' set' : ''}" data-one="${esc(p.code)}">${p.minStock > 0 ? `ไม่ถึง ${qtyFmt(p.minStock)}` : 'ไม่เตือน'} ▾</button></div>`).join('') : '<div class="empty">ไม่มีสินค้าในกลุ่มนี้</div>';
+    shown = base.filter((p) => inCat(p, stockCat)).sort(byCatName()).slice(0, 100);
+    $('#alist').innerHTML = shown.length ? catGroups(shown, (p) => `<div class="ps-arow${picked.has(p.code) ? ' on' : ''}"><label><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''}><span class="ps-name"><b>${esc(p.name)}</b><small class="${isLow(p) ? 'low-txt' : ''}">เหลือ ${qtyFmt(p.stock)} ${esc(p.unit)}${isLow(p) ? ' · ใกล้หมดแล้ว' : ''}</small></span></label>
+      <button type="button" class="ps-minpill${p.minStock > 0 ? ' set' : ''}" data-one="${esc(p.code)}">${p.minStock > 0 ? `ไม่ถึง ${qtyFmt(p.minStock)}` : 'ไม่เตือน'} ▾</button></div>`, 'ps') : '<div class="empty">ไม่มีสินค้าในกลุ่มนี้</div>';
     const n = picked.size;
     $('#abar').innerHTML = n ? `<b>เลือก ${n} รายการ · เตือนเมื่อเหลือไม่ถึง</b><div class="ps-mins">${MIN_PRESETS.map((v) => `<button type="button" data-set="${v}">${v}</button>`).join('')}</div>
       <div class="row" style="gap:8px"><button type="button" class="btn" data-set="other" style="flex:1;justify-content:center">พิมพ์จำนวนเอง</button><button type="button" class="btn" data-set="0" style="flex:1;justify-content:center;color:var(--red)">ปิดการเตือน</button></div>` : '<div class="muted" style="text-align:center">ติ๊กเลือกสินค้าเพื่อตั้งพร้อมกันหลายรายการ</div>';
@@ -2155,6 +2155,20 @@ function catChips(products, active, attr = 'data-cat-f') {
   const none = products.filter((p) => !p.category).length;
   return `<button type="button" class="chip" ${attr}="" aria-pressed="${!active}">ทุกหมวด ${products.length}</button>${cats().map((c) => `<button type="button" class="chip" ${attr}="${esc(c)}" aria-pressed="${active === c}">${esc(c)} <span class="muted">${n(c)}</span></button>`).join('')}${none ? `<button type="button" class="chip" ${attr}="${NO_CAT}" aria-pressed="${active === NO_CAT}">ยังไม่มีหมวด <span class="muted">${none}</span></button>` : ''}`;
 }
+// Keep each category together, in the shop's category order (no category last), then by name.
+const catRank = () => { const m = new Map(cats().map((c, i) => [c, i])); return (p) => (p.category && m.has(p.category) ? m.get(p.category) : 1e6); };
+const byCatName = () => { const r = catRank(); return (a, b) => r(a) - r(b) || a.name.localeCompare(b.name, 'th'); };
+// Rows with a heading line wherever the category changes.
+function catGroups(list, row, kind, cols = 1) {
+  const known = new Set(cats()), key = (p) => (p.category && known.has(p.category) ? p.category : '');
+  const counts = new Map(); list.forEach((p) => counts.set(key(p), (counts.get(key(p)) || 0) + 1));
+  let last = null;
+  return list.map((p) => {
+    const k = key(p); let h = '';
+    if (k !== last) { const t = `${esc(k || 'ยังไม่มีหมวด')} <span>${counts.get(k)}</span>`; h = kind === 'tr' ? `<tr class="cat-head"><td colspan="${cols}">${t}</td></tr>` : `<div class="cat-head${kind === 'ps' ? ' ps' : ''}">${t}</div>`; last = k; }
+    return h + row(p);
+  }).join('');
+}
 const inCat = (p, c) => !c || (c === NO_CAT ? !p.category : p.category === c);
 function viewProducts() {
   const picked = new Set();
@@ -2172,11 +2186,11 @@ function viewProducts() {
     const base = liveProducts().filter((p) => (!n || norm(p.name).includes(n) || p.code.startsWith($('#pq2').value.trim()))
       && (!f || (f === 'neg' ? !p.noStock && p.stock < 0 : f === 'noprice' ? !p.price : p.noStock)));
     $('#pcats').innerHTML = catChips(base, prodCat);
-    const list = base.filter((p) => inCat(p, prodCat)).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    const list = base.filter((p) => inCat(p, prodCat)).sort(byCatName());
     shown = list.slice(0, 300);
     $('#ptab').innerHTML = `<tr><th style="width:36px"><input type="checkbox" id="pall" aria-label="เลือกทั้งหมดที่แสดง" style="width:20px;height:20px;accent-color:var(--green)" ${shown.length && shown.every((p) => picked.has(p.code)) ? 'checked' : ''}></th><th>รหัส</th><th>ชื่อ</th><th>หมวดหมู่</th><th>หน่วย</th><th class="num">ราคาขาย</th><th class="num">คงเหลือ</th><th></th></tr>`
-      + (shown.length ? shown.map((p) => `<tr${picked.has(p.code) ? ' class="sel"' : ''}><td><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''} aria-label="เลือก ${esc(p.name)}" style="width:20px;height:20px;accent-color:var(--green)"></td><td class="mono">${esc(p.code)}</td><td>${esc(p.name)}</td>
-        <td>${p.category ? `<span class="cat-tag">${esc(p.category)}</span>` : `<span class="muted" style="font-size:13px">ยังไม่มีหมวด${p.group ? ` · เดิม: ${esc(p.group)}` : ''}</span>`}</td><td>${esc(p.unit)}</td><td class="num">${p.price ? money(p.price) : '<span class="pill credit">ไม่มีราคา</span>'}</td><td class="num">${p.noStock ? '<span class="muted">ไม่มีสต๊อก</span>' : `<span style="${p.stock < 0 ? 'color:var(--red);font-weight:600' : ''}">${qtyFmt(p.stock)}</span>`}</td><td><button class="btn small" data-e="${esc(p.code)}">แก้ไข</button></td></tr>`).join('')
+      + (shown.length ? catGroups(shown, (p) => `<tr${picked.has(p.code) ? ' class="sel"' : ''}><td><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''} aria-label="เลือก ${esc(p.name)}" style="width:20px;height:20px;accent-color:var(--green)"></td><td class="mono">${esc(p.code)}</td><td>${esc(p.name)}</td>
+        <td>${p.category ? `<span class="cat-tag">${esc(p.category)}</span>` : `<span class="muted" style="font-size:13px">ยังไม่มีหมวด${p.group ? ` · เดิม: ${esc(p.group)}` : ''}</span>`}</td><td>${esc(p.unit)}</td><td class="num">${p.price ? money(p.price) : '<span class="pill credit">ไม่มีราคา</span>'}</td><td class="num">${p.noStock ? '<span class="muted">ไม่มีสต๊อก</span>' : `<span style="${p.stock < 0 ? 'color:var(--red);font-weight:600' : ''}">${qtyFmt(p.stock)}</span>`}</td><td><button class="btn small" data-e="${esc(p.code)}">แก้ไข</button></td></tr>`, 'tr', 8)
         : '<tr><td colspan="8" class="empty">ไม่พบสินค้า</td></tr>');
     const k = picked.size;
     $('#pbulk').classList.toggle('hidden', !k);
@@ -2301,7 +2315,7 @@ function viewPrices() {
     if (r.step) n = Math.ceil(n / r.step - 1e-9) * r.step;
     return Math.max(0, round2(n));
   };
-  const shown = () => { const q = norm($('#psq').value); return liveProducts().filter((p) => !q || norm(p.name).includes(q) || p.code.startsWith($('#psq').value.trim())).sort((a, b) => a.name.localeCompare(b.name, 'th')); };
+  const shown = () => { const q = norm($('#psq').value); return liveProducts().filter((p) => !q || norm(p.name).includes(q) || p.code.startsWith($('#psq').value.trim())).sort(byCatName()); };
   const draw = () => {
     const r = rule(), list = shown();
     $('#ptbl').innerHTML = `<tr><th style="width:36px"></th><th>สินค้า</th><th>หน่วย</th><th class="num">ราคาเดิม</th><th class="num">ราคาใหม่</th></tr>` + list.slice(0, 400).map((p) => {
