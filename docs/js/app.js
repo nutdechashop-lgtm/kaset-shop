@@ -44,7 +44,51 @@ const NAV = [
   ['report', 'รายงาน', true], ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 // Sub-pages that light up a main menu item.
-const NAV_PARENT = { paid: 'debt', overdue: 'debt', stale: 'debt', bill: 'bills', import: 'backup', prices: 'products' };
+// Line icons (24px) used by the phone tab bar and big buttons.
+const ICON = {
+  home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1Z"/>',
+  sale: '<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h8.6a2 2 0 0 0 2-1.6L22 7H6"/>',
+  debt: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11h5M19.5 8.5v5"/>',
+  stock: '<path d="M21 8 12 3 3 8v8l9 5 9-5Z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  close: '<rect x="2" y="6" width="20" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.5"/>',
+  pay: '<rect x="2" y="6" width="20" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.5"/><path d="M6 12.5h.01M18 12.5h.01"/>',
+  bills: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+  more: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chev: '<path d="m9 6 6 6-6 6"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 8v8M11 8v8M15 8v8M18 8v8"/>',
+  phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/>',
+};
+const icon = (k, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
+// Phone: a tab bar at the bottom with the 4 most used pages; everything else is under "เมนู".
+function phoneTabs() { return isManager() ? [['home', 'หน้าแรก'], ['sale', 'ขาย'], ['debt', 'ลูกหนี้'], ['stock', 'สต๊อก']] : [['sale', 'ขาย'], ['debt', 'ลูกหนี้'], ['stock', 'สต๊อก'], ['close', 'ปิดร้าน']]; }
+function drawTabbar() {
+  const bar = $('#tabbar'); if (!bar) return;
+  if (!shop || !isPhone()) { bar.innerHTML = ''; document.body.classList.remove('has-tabbar'); return; }
+  document.body.classList.add('has-tabbar');
+  const top = NAV_PARENT[current] || current;
+  const pending = pendingRequests().length;
+  bar.innerHTML = phoneTabs().map(([k, t]) => `<a href="#${k}" ${top === k ? 'aria-current="page"' : ''}>${icon(k === 'close' ? 'close' : k)}<span>${t}</span></a>`).join('')
+    + `<button type="button" id="moreBtn" ${phoneTabs().some(([k]) => k === top) ? '' : 'aria-current="page"'}>${icon('more')}<span>เมนู</span>${pending && isManager() ? `<i class="dot">${pending}</i>` : ''}</button>`;
+  $('#moreBtn').onclick = openMenuSheet;
+}
+function openMenuSheet() {
+  const tabs = new Set(phoneTabs().map(([k]) => k));
+  const pending = pendingRequests().length;
+  const items = [['search', 'ค้นหา'], ...NAV.filter(([k, , mgr]) => (!mgr || isManager()) && !tabs.has(k))];
+  const f = openDialog(`<div class="sheet-head"><div><b>${esc(user.name)}</b> <span class="muted">· ${ROLE[user.role] || ''}</span></div><div class="muted" style="font-size:13px">${esc(settings.name || settings.label || '')}</div></div>
+    ${user.role === 'admin' ? `<label class="field">ดูโปรแกรมในมุมมองของ<select id="sheetViewAs">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
+    <div class="sheet-list">${items.map(([k, t]) => `<a href="#${k}" data-go>${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}<span class="chev">${icon('chev', 20)}</span></a>`).join('')}</div>
+    <div class="row">${user.role === 'admin' || shops.length > 1 ? '<button type="button" class="btn" id="sheetShop">เปลี่ยนร้าน</button>' : ''}${backend.mode === 'cloud' ? '<button type="button" class="btn" id="sheetOut">ออกจากระบบ</button>' : ''}<button class="btn" value="cancel">ปิด</button></div>`);
+  $$('[data-go]', f).forEach((a) => a.addEventListener('click', () => dlg.close()));
+  $('#sheetViewAs', f)?.addEventListener('change', (e) => { viewAs = e.target.value; lsSet('viewAs', viewAs); dlg.close(); render(); });
+  $('#sheetShop', f)?.addEventListener('click', () => { dlg.close(); leaveShop(); viewShopPicker(); });
+  $('#sheetOut', f)?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; dlg.close(); leaveShop(); await backend.signOut(); user = null; start(); });
+  dlg.classList.add('sheet'); dlg.addEventListener('close', () => dlg.classList.remove('sheet'), { once: true });
+}
+
+const NAV_PARENT = { paid: 'debt', overdue: 'debt', stale: 'debt', bill: 'bills', import: 'backup', prices: 'products', search: 'search' };
 const isPhone = () => window.matchMedia('(max-width: 700px)').matches;
 // Where each person lands: owners/admin → home, staff on a phone → stock, staff on a computer → sale.
 const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
@@ -54,7 +98,8 @@ function drawHeader() {
   $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   const nAlert = alertsOn() ? currentAlerts().count : 0;
-  $('#bell')?.remove(); $('#netPill')?.remove();
+  $('#bell')?.remove(); $('#netPill')?.remove(); $('#hdrSearch')?.remove();
+  if (inShop && isPhone()) $('#shopName').insertAdjacentHTML('afterend', `<a id="hdrSearch" class="bell" href="#search" aria-label="ค้นหา">${icon('search', 22)}</a>`);
   if (inShop) {
     const pend = backend.pendingCount?.(shopId) || 0, off = navigator.onLine === false;
     if (off || pend) $('#shopName').insertAdjacentHTML('afterend', `<span id="netPill" class="pill" style="background:${off ? 'var(--red)' : 'var(--orange)'};color:#fff;margin-left:6px" title="บิลที่ขายตอนไม่มีเน็ตเก็บไว้ในเครื่องนี้ จะส่งขึ้นระบบเองเมื่อเน็ตกลับ">${off ? 'ไม่มีอินเทอร์เน็ต · ขายได้ตามปกติ' : ''}${off && pend ? ' · ' : ''}${pend ? `รอส่งขึ้นระบบ ${pend} บิล` : ''}</span>`);
@@ -76,7 +121,7 @@ function drawHeader() {
   }
   $('#logout')?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; leaveShop(); await backend.signOut(); user = null; start(); });
 }
-const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, stale: viewStale, close: viewClose, report: viewReport, prices: viewPrices, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
+const routes = { home: viewHome, stock: viewStock, bank: viewBank, paid: viewPaid, overdue: viewOverdue, stale: viewStale, close: viewClose, report: viewReport, prices: viewPrices, search: viewSearch, backup: viewBackup, bill: viewBillEdit, approve: viewApprove, sale: viewSale, debt: viewDebt, bills: viewBills, customers: viewCustomers, products: viewProducts, users: viewUsers, import: viewImport, settings: viewSettings };
 let current = 'sale';
 function render() {
   if (!shop) return;
@@ -87,7 +132,7 @@ function render() {
   $('#today').textContent = 'วันที่ ' + thDate(todayIso());
   routes[name](arg ? decodeURIComponent(arg) : undefined);
 }
-function markNav() { const top = NAV_PARENT[current] || current; $$('#nav a').forEach((a) => { if (a.getAttribute('href') === '#' + top) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); }
+function markNav() { drawTabbar(); const top = NAV_PARENT[current] || current; $$('#nav a').forEach((a) => { if (a.getAttribute('href') === '#' + top) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }); }
 window.addEventListener('hashchange', render);
 const pendingRequests = () => (data?.requests || []).filter((r) => r.status === 'pending' && (r.kind !== 'costPin' || (user?.role === 'admin' && !previewing())));
 
@@ -195,7 +240,7 @@ async function enterShop(id) {
   checkAlerts().catch(() => {});
   backend.flushPending?.(shopId).catch(() => {});
 }
-function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); }
+function leaveShop() { backend.closeShop(); shop = null; data = null; shopId = null; drawHeader(); drawTabbar(); }
 
 // ---------------- printing (same layout as the old program's bills: A5 landscape, A4 when long) ----------------
 // Always an A4 portrait page (no printer settings to change). A bill that fits goes in the top half
@@ -303,13 +348,40 @@ function resetCart() { Object.assign(cart, { lines: [], type: 'cash', customerCo
 const liveProducts = () => data.products.filter((p) => !p.deleted);
 function searchProducts(q) {
   const n = norm(q); if (!n) return [];
-  return liveProducts().filter((p) => norm(p.name).includes(n) || p.code.startsWith(q.trim())).slice(0, 30);
+  return liveProducts().filter((p) => norm(p.name).includes(n) || p.code.startsWith(q.trim()) || (p.barcode && p.barcode === q.trim())).slice(0, 30);
 }
 function searchCustomers(q) {
   const n = norm(q); if (!n) return [];
   return data.customers.filter((c) => norm(c.name).includes(n) || norm(c.zone).includes(n) || c.code.startsWith(q.trim())).slice(0, 20);
 }
 
+// Products this shop sells most (last 35 days), for one-tap adding.
+function favHtml() {
+  const qty = new Map();
+  for (const b of data.bills) if (b.status !== 'cancelled' && b.source !== 'programkaset') for (const l of b.lines || []) qty.set(l.code, (qty.get(l.code) || 0) + 1);
+  const live = new Map(liveProducts().map((p) => [p.code, p]));
+  let top = [...qty.entries()].filter(([c]) => live.has(c)).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([c]) => live.get(c));
+  if (top.length < 3) return '';
+  return `<div class="fav"><div class="fav-h">ขายบ่อย · แตะเพื่อเพิ่ม</div><div class="fav-grid">${top.map((p) => `<button type="button" data-fav="${esc(p.code)}"><span>${esc(p.name)}</span><b class="mono">${p.price ? money(p.price) : '-'}</b></button>`).join('')}</div></div>`;
+}
+// Camera barcode scanning (Chrome on Android). Calls done(code) once.
+async function scanBarcode(done) {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); } catch { toast('เปิดกล้องไม่ได้ · อนุญาตการใช้กล้องในเบราว์เซอร์ก่อน'); return; }
+  const det = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'qr_code'] });
+  const f = openDialog(`<h2>สแกนบาร์โค้ด</h2><video id="scanVid" playsinline muted style="width:100%;border-radius:14px;background:#000;max-height:50vh;object-fit:cover"></video>
+    <div class="muted" style="font-size:14px">เล็งกล้องไปที่บาร์โค้ดบนสินค้า</div><div class="row"><button class="btn" value="cancel">ปิด</button></div>`);
+  const v = $('#scanVid', f); v.srcObject = stream; await v.play().catch(() => {});
+  let live = true;
+  const stop = () => { live = false; stream.getTracks().forEach((t) => t.stop()); };
+  dlg.addEventListener('close', stop, { once: true });
+  const tick = async () => {
+    if (!live) return;
+    try { const r = await det.detect(v); if (r[0]?.rawValue) { stop(); dlg.close(); done(r[0].rawValue); return; } } catch { /* keep trying */ }
+    setTimeout(tick, 250);
+  };
+  tick();
+}
 function viewSale() {
   backend.reserveNumbers?.(shopId, settings).catch(() => {}); // so this computer can keep selling if the internet drops
   const today = daySummary(data, todayIso());
@@ -317,10 +389,12 @@ function viewSale() {
   ${!liveProducts().length ? `<div class="note">ยังไม่มีสินค้าในร้านนี้ · ${isManager() ? '<a href="#import">นำเข้าข้อมูลจากโปรแกรมเก่า</a> หรือ' : ''} เพิ่มสินค้าที่เมนู <a href="#products">สินค้า</a></div>` : ''}
   <div class="grid-sale">
     <section class="card">
-      <label class="field">ค้นหาสินค้า (พิมพ์ชื่อ แล้วกด Enter เพื่อเพิ่ม)
-        <input type="search" id="pq" placeholder="เช่น ปุ๋ย, ยาฆ่าหญ้า" autocomplete="off">
+      <label class="field">ค้นหาสินค้า (พิมพ์ชื่อหรือยิงบาร์โค้ด แล้วกด Enter)
+        <span class="row" style="gap:8px;flex-wrap:nowrap"><input type="search" id="pq" placeholder="เช่น ปุ๋ย, ยาฆ่าหญ้า" autocomplete="off" style="flex:1;min-width:0">
+        ${'BarcodeDetector' in window ? `<button type="button" class="icon-btn scan-btn" id="scanBtn" aria-label="สแกนบาร์โค้ดด้วยกล้อง">${icon('scan', 24)}</button>` : ''}</span>
       </label>
       <div class="results hidden" id="pres"></div>
+      ${favHtml()}
       <div class="scroll"><table id="lines"></table></div>
     </section>
     <aside class="card" style="gap:14px">
@@ -363,7 +437,8 @@ function viewSale() {
       <button class="btn" id="clear" style="justify-content:center">ล้างรายการ</button>
     </aside>
   </div>
-  <section class="card">
+  <div class="sale-bar"><div><small>รวมทั้งสิ้น</small><b class="mono" id="barNet">0.00</b></div><button type="button" class="btn primary" id="barSave">บันทึกการขาย</button></div>
+  <section class="card sale-today">
     <h2>วันนี้</h2>
     <div class="stats">
       <div class="stat"><div class="k">บิลขาย</div><div class="v">${today.bills}</div></div>
@@ -386,7 +461,7 @@ function viewSale() {
     const p = data.products.find((x) => x.code === code); if (!p) return;
     const ex = cart.lines.find((l) => l.code === code);
     if (ex) ex.qty = round2(ex.qty + 1); else cart.lines.push({ code, qty: 1, price: p.price });
-    pq.value = ''; showResults(); drawLines(); pq.focus();
+    pq.value = ''; showResults(); drawLines(); if (!isPhone()) pq.focus(); // on a phone, don't pop the keyboard up after each tap
   };
   pq.addEventListener('input', showResults);
   pq.addEventListener('keydown', (e) => {
@@ -394,19 +469,39 @@ function viewSale() {
       e.preventDefault(); if (!found.length) return;
       active = (active + (e.key === 'ArrowDown' ? 1 : -1) + found.length) % found.length;
       $$('button', pres).forEach((b, i) => b.classList.toggle('active', i === active));
-    } else if (e.key === 'Enter') { e.preventDefault(); if (found[active]) add(found[active].code); }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const bc = pq.value.trim(), hit = bc && liveProducts().find((p) => p.barcode && p.barcode === bc);
+      if (hit) add(hit.code); else if (found[active]) add(found[active].code);
+    }
   });
+  $$('[data-fav]').forEach((b) => b.addEventListener('click', () => add(b.dataset.fav)));
+  $('#scanBtn')?.addEventListener('click', () => scanBarcode((code) => {
+    const hit = liveProducts().find((p) => p.barcode === code);
+    if (hit) { add(hit.code); toast('เพิ่ม ' + hit.name); } else { pq.value = code; showResults(); toast('ไม่พบสินค้าที่มีบาร์โค้ด ' + code + ' · ใส่บาร์โค้ดได้ที่หน้าแก้ไขสินค้า'); }
+  }));
+  $('#barSave').addEventListener('click', () => $('#save').click());
   pres.addEventListener('click', (e) => { const b = e.target.closest('[data-code]'); if (b) add(b.dataset.code); });
 
   function drawLines() {
     const pm = new Map(data.products.map((p) => [p.code, p]));
+    if (isPhone()) {
+      $('#lines').innerHTML = cart.lines.length ? `<tr><th colspan="2">ในบิล ${cart.lines.length} รายการ</th></tr>` + cart.lines.map((l, i) => {
+        const p = pm.get(l.code);
+        return `<tr class="mline${l.price > 0 ? '' : ' noprice'}"><td><b>${esc(p?.name)}</b>
+            <span class="mline-price">ราคา <input class="price${l.price > 0 ? '' : ' zero'}" type="number" min="0" step="0.01" inputmode="decimal" data-i="${i}" data-f="price" value="${l.price || ''}" placeholder="ใส่ราคา" aria-label="ราคาต่อหน่วย"> / ${esc(p?.unit)}</span></td>
+          <td><div class="stepper"><button type="button" data-step="${i}" data-d="-1" aria-label="ลดจำนวน">−</button><input class="qty" type="number" min="0" step="any" inputmode="decimal" data-i="${i}" data-f="qty" value="${l.qty}" aria-label="จำนวน"><button type="button" data-step="${i}" data-d="1" aria-label="เพิ่มจำนวน">+</button></div>
+            <b class="mono mline-total" data-total="${i}">${money(l.qty * l.price)}</b></td></tr>`;
+      }).join('') : '<tr><td class="empty">ยังไม่มีรายการ · ค้นหา หรือแตะสินค้าขายบ่อยด้านบน</td></tr>';
+      drawTotals(); return;
+    }
     $('#lines').innerHTML = cart.lines.length
       ? `<tr><th>สินค้า</th><th class="num">จำนวน</th><th class="num">ราคา/หน่วย</th><th class="num">รวม</th><th></th></tr>` + cart.lines.map((l, i) => {
         const p = pm.get(l.code);
         return `<tr><td>${esc(p?.name)} <span class="muted">· ${esc(p?.unit)}</span></td>
           <td class="num"><input class="qty" type="number" min="0" step="any" data-i="${i}" data-f="qty" value="${l.qty}" aria-label="จำนวน"></td>
           <td class="num"><input class="price${l.price > 0 ? '' : ' zero'}" type="number" min="0" step="0.01" data-i="${i}" data-f="price" value="${l.price}" aria-label="ราคา"></td>
-          <td class="num">${money(l.qty * l.price)}</td>
+          <td class="num" data-total="${i}">${money(l.qty * l.price)}</td>
           <td><button class="btn small" data-del="${i}" aria-label="ลบรายการ">ลบ</button></td></tr>`;
       }).join('')
       : '<tr><td class="empty">ยังไม่มีรายการ ค้นหาสินค้าด้านบนเพื่อเพิ่ม</td></tr>';
@@ -416,6 +511,7 @@ function viewSale() {
     const sub = round2(cart.lines.reduce((s, l) => s + l.qty * l.price, 0));
     const net = round2(sub - (Number(cart.discount) || 0));
     $('#sub').textContent = money(sub); $('#net').textContent = money(net);
+    if ($('#barNet')) $('#barNet').textContent = money(net);
     if (cart.type === 'cash') drawCash(net);
     if (cart.type === 'credit') {
       const perDay = round2(net * cart.rate / 100 / 30);
@@ -435,12 +531,19 @@ function viewSale() {
   $('#lines').addEventListener('input', (e) => {
     const t = e.target; if (!t.dataset.f) return;
     cart.lines[+t.dataset.i][t.dataset.f] = Number(t.value) || 0;
-    const row = t.closest('tr'); const l = cart.lines[+t.dataset.i];
-    row.children[3].textContent = money(l.qty * l.price);
+    const l = cart.lines[+t.dataset.i];
+    const tot = $(`[data-total="${t.dataset.i}"]`, $('#lines')); if (tot) tot.textContent = money(l.qty * l.price);
     if (t.dataset.f === 'price') t.classList.toggle('zero', !(l.price > 0));
     drawTotals();
   });
-  $('#lines').addEventListener('click', (e) => { const b = e.target.closest('[data-del]'); if (b) { cart.lines.splice(+b.dataset.del, 1); drawLines(); } });
+  $('#lines').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-del]'); if (b) { cart.lines.splice(+b.dataset.del, 1); drawLines(); return; }
+    const st = e.target.closest('[data-step]'); if (!st) return;
+    const i = +st.dataset.step, l = cart.lines[i];
+    l.qty = round2((Number(l.qty) || 0) + Number(st.dataset.d));
+    if (l.qty <= 0) cart.lines.splice(i, 1); // minus at 1 removes the line
+    drawLines();
+  });
 
   const cq = $('#cq'), cres = $('#cres');
   const debts = customerDebts(data, todayIso());
@@ -492,7 +595,7 @@ function viewSale() {
       <div class="row"><button class="btn primary" value="print">พิมพ์บิล</button><button class="btn" value="cancel">ขายต่อ</button></div>`, () => { printBill(bill); });
   });
   drawLines();
-  pq.focus();
+  if (!isPhone()) pq.focus();
 }
 
 // ---------------- debtors ----------------
@@ -540,7 +643,8 @@ function viewDebtor(code) {
   <div><a href="#debt" class="btn small">← ลูกหนี้ทั้งหมด</a></div>
   <section class="card">
     <div class="row" style="justify-content:space-between">
-      <div><h2>${esc(c?.name || 'รหัส ' + code)}</h2><div class="muted">${esc(c?.zone)} · รหัส ${esc(code)} ${c?.phone ? '· โทร ' + esc(c.phone) : ''}</div></div>
+      <div style="display:flex;gap:10px;align-items:flex-start"><div><h2>${esc(c?.name || 'รหัส ' + code)}</h2><div class="muted">${esc(c?.zone)} · รหัส ${esc(code)} ${c?.phone ? '· โทร ' + esc(c.phone) : ''}</div></div>
+        ${c?.phone ? `<a class="icon-btn call-btn" href="tel:${esc(c.phone.replace(/[^\d+]/g, ''))}" aria-label="โทรหา ${esc(c.name)}">${icon('phone', 22)}</a>` : ''}</div>
       ${d ? `<div style="text-align:right"><div class="muted" style="font-size:14px">รวมค้างถึงวันนี้</div><div class="mono" style="font-size:26px;font-weight:700">฿${money(d.total)}</div><div class="muted" style="font-size:14px">ต้น ${money(d.principal)} + ดอก ${money(d.interest)}</div></div>` : ''}
     </div>
     ${d ? `<div class="scroll"><table id="bt"></table></div>` : '<div class="ok">ไม่มียอดค้าง</div>'}
@@ -548,7 +652,8 @@ function viewDebtor(code) {
   ${d ? `<section class="card">
     <h2>รับชำระ</h2>
     <div class="seg" role="group" aria-label="วิธีชำระ"><button type="button" data-m="amount" aria-pressed="true">ตามจำนวนเงิน</button><button type="button" data-m="bills" aria-pressed="false">ตามบิลที่เลือก</button></div>
-    <label class="field" id="amtWrap">จำนวนเงินที่รับ (บาท)<input type="number" id="amt" min="0" step="0.01" placeholder="0.00" style="font-size:20px;font-family:var(--mono)"></label>
+    <label class="field" id="amtWrap">จำนวนเงินที่รับ (บาท)<input type="number" id="amt" min="0" step="0.01" inputmode="decimal" placeholder="0.00" class="amt-big"></label>
+    <div class="quick-amt" id="qamt">${[['ทั้งหมด', round2(d.total)], ...[5000, 1000, 500].filter((v) => v < d.total).map((v) => [v.toLocaleString(), v])].map(([t, v]) => `<button type="button" class="btn small" data-amt="${v}">${t}</button>`).join('')}</div>
     <div class="muted" id="billHint" style="font-size:14px">ตัดดอกเบี้ยก่อน แล้วตัดเงินต้นจากบิลเก่าสุด</div>
     <div class="scroll"><table id="alloc"></table></div>
     <div class="err hidden" id="payErr"></div>
@@ -601,11 +706,12 @@ function viewDebtor(code) {
   $$('[data-m]').forEach((b) => b.addEventListener('click', () => {
     mode = b.dataset.m;
     $$('[data-m]').forEach((x) => x.setAttribute('aria-pressed', x === b));
-    $('#amtWrap').classList.toggle('hidden', mode !== 'amount');
+    $('#amtWrap').classList.toggle('hidden', mode !== 'amount'); $('#qamt')?.classList.toggle('hidden', mode !== 'amount');
     $('#billHint').textContent = mode === 'amount' ? 'ตัดดอกเบี้ยก่อน แล้วตัดเงินต้นจากบิลเก่าสุด' : 'ติ๊กเลือกบิลด้านบน ระบบจะคิดเงินต้นรวมดอกเบี้ยของบิลที่เลือก';
     preview();
   }));
   $('#amt').addEventListener('input', preview);
+  $$('#qamt [data-amt]').forEach((b) => b.addEventListener('click', () => { $('#amt').value = b.dataset.amt; $$('#qamt [data-amt]').forEach((x) => x.setAttribute('aria-pressed', x === b)); preview(); }));
   $('#bt').addEventListener('change', (e) => {
     const cb = e.target.closest('[data-b]'); if (!cb) return;
     cb.checked ? selected.add(cb.dataset.b) : selected.delete(cb.dataset.b);
@@ -894,6 +1000,7 @@ function rateDialog(b, done) {
 
 // ---------------- home (owner) ----------------
 function viewHome() {
+  if (isPhone()) return viewHomePhone();
   const today = todayIso();
   const s = shopSnapshot(data, today);
   const tile = (k, v, href, warn) => `<a class="stat tile${warn ? ' warn' : ''}" href="${href}"><div class="k">${k}</div><div class="v">${v}</div></a>`;
@@ -965,6 +1072,8 @@ function alertsCard() {
   </section>`;
 }
 // Internet goes / comes back: update the header and send bills that were sold offline.
+let rsTimer; let wasPhone = window.matchMedia('(max-width: 700px)').matches;
+window.addEventListener('resize', () => { clearTimeout(rsTimer); rsTimer = setTimeout(() => { const ph = isPhone(); if (ph !== wasPhone && shop) { wasPhone = ph; drawHeader(); render(); } }, 200); });
 window.addEventListener('offline', () => { if (shop) drawHeader(), markNav(); });
 window.addEventListener('online', () => {
   if (!shop) return;
@@ -1022,6 +1131,37 @@ function withAudit(raw) {
   wrap('issueCostPin', (sid, id) => data?.requests.find((r) => r.id === id), (req) => ({ action: 'ออก PIN ดูราคาทุน', target: req?.productName || '', detail: 'ให้ ' + (req?.byName || '-') }));
   wrap('useCostPin', null, (c, ok) => (ok ? { action: 'ใช้ PIN ดูราคาทุน' } : null));
   return api;
+}
+
+// Phone home: search, today's money, four big buttons, things to deal with.
+function viewHomePhone() {
+  const today = todayIso();
+  const s = shopSnapshot(data, today);
+  const nStale = stalePayers(data, today).length, nPend = pendingRequests().length;
+  const backupOld = !settings.lastBackupAt || daysBetween(settings.lastBackupAt.slice(0, 10), today) > 7;
+  const todo = [
+    [nPend, 'คำขอรออนุมัติ', '#approve', 'ok'], [s.lowStock, 'สินค้าใกล้หมด', '#stock/low', 'warn'], [s.negativeStock, 'สต๊อกติดลบ', '#stock', 'warn'],
+    [nStale, 'ลูกหนี้ไม่ชำระเกิน 6 เดือน', '#stale', 'bad'], [s.noPrice, 'สินค้ายังไม่มีราคา', '#products', 'warn'],
+  ].filter(([n]) => n > 0);
+  view.innerHTML = `
+  <a class="search-box home-search" href="#search">${icon('search', 22)}<span>ค้นหาลูกค้า สินค้า เลขบิล</span></a>
+  <section class="card today-card">
+    <div class="row" style="justify-content:space-between;align-items:baseline"><span class="muted" style="font-weight:600;font-size:15px">เงินเข้าวันนี้</span><a href="#close" style="font-weight:600;font-size:15px">ปิดร้าน ›</a></div>
+    <div class="mono today-big">฿${money(s.today.moneyIn)}</div>
+    <div class="today-3"><div><small>ขายสด</small><b class="mono">${money(s.today.cash)}</b></div><div><small>รับชำระ</small><b class="mono">${money(s.today.paid)}</b></div><div class="cr"><small>ขายเชื่อ</small><b class="mono">${money(s.today.credit)}</b></div></div>
+  </section>
+  <div class="home-acts">
+    <a href="#sale" class="primary">${icon('sale', 28)}<span>ขาย</span></a>
+    <a href="#debt">${icon('pay', 28)}<span>รับชำระหนี้</span></a>
+    <a href="#stock">${icon('stock', 28)}<span>นับสต๊อก</span></a>
+    <a href="#bills">${icon('bills', 28)}<span>ค้นหาบิล</span></a>
+  </div>
+  <section class="card" style="padding:0;overflow:hidden;gap:0">
+    <div style="padding:14px 16px 6px;font-weight:700">ต้องจัดการ</div>
+    ${todo.length ? todo.map(([n, t, h, c]) => `<a class="todo-row" href="${h}"><span class="todo-n ${c}">${n}</span><span style="flex:1">${t}</span>${icon('chev', 20)}</a>`).join('') : '<div class="muted" style="padding:6px 16px 14px">ไม่มีเรื่องค้าง</div>'}
+    ${backupOld ? `<a class="todo-row" href="#backup"><span class="todo-n warn">!</span><span style="flex:1">${settings.lastBackupAt ? 'ไม่ได้สำรองข้อมูลเกิน 7 วัน' : 'ยังไม่เคยสำรองข้อมูล'}</span>${icon('chev', 20)}</a>` : ''}
+  </section>
+  ${alertsCard()}`;
 }
 
 // ---------------- debtor sub-tabs ----------------
@@ -1374,17 +1514,19 @@ function stockAlerts() {
 }
 async function adjustDialog(p) {
   let newMin = Number(p.minStock) || 0;
+  const reasons = ['นับสต๊อกจริง', 'รับของเข้า', 'ของเสีย / หมดอายุ', 'คืนผู้ขาย', 'อื่น ๆ'];
   const f = openDialog(`<h2>${esc(p.name)}</h2>
     <div class="muted">ในระบบตอนนี้ <b>${qtyFmt(p.stock)}</b> ${esc(p.unit)}</div>
-    <label class="field">นับได้จริง (${esc(p.unit)})
-      <div class="row" style="flex-wrap:nowrap"><button class="btn" type="button" data-step="-1" aria-label="ลด">−</button>
-      <input type="number" name="counted" step="any" value="${p.stock}" style="font-size:24px;text-align:center;font-family:var(--mono);flex:1;min-width:0">
-      <button class="btn" type="button" data-step="1" aria-label="เพิ่ม">+</button></div></label>
+    <div class="field">นับได้จริง (${esc(p.unit)})
+      <div class="big-step"><button type="button" data-step="-1" aria-label="ลด 1">−</button>
+      <input type="number" name="counted" step="any" inputmode="decimal" value="${p.stock}" aria-label="จำนวนที่นับได้">
+      <button type="button" data-step="1" aria-label="เพิ่ม 1">+</button></div></div>
+    <div class="quick-amt">${[5, 10, 20, 50].map((n) => `<button type="button" class="btn small" data-step="${n}">+${n}</button>`).join('')}</div>
+    <div class="field">เหตุผล<input type="hidden" name="reason" value="นับสต๊อกจริง"><div class="row" style="gap:8px" id="adjReason">${reasons.map((r, i) => `<button type="button" class="chip" data-reason="${r}" aria-pressed="${i === 0}">${r}</button>`).join('')}</div></div>
     <div class="field">เตือนเมื่อเหลือไม่ถึง<div class="row" style="gap:6px" id="adjMin">${minButtons(p.minStock, 'data-min')}</div></div>
-    <label class="field">เหตุผล<select name="reason"><option>นับสต๊อกจริง</option><option>รับของเข้า</option><option>ของเสีย / หมดอายุ</option><option>คืนผู้ขาย</option><option>อื่น ๆ</option></select></label>
     <div id="logs" class="muted" style="font-size:13px"></div>
     <div class="err hidden dlg-err"></div>
-    <div class="row"><button class="btn primary" value="ok">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (form) => {
+    <div class="row"><button class="btn primary" value="ok" id="adjSave" style="flex:1;justify-content:center;min-height:56px;font-size:18px">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (form) => {
     const n = Number(form.counted.value);
     if (!Number.isFinite(n)) throw new Error('ใส่จำนวน');
     if (newMin !== (Number(p.minStock) || 0)) await backend.setMinStock(shopId, [p.code], newMin);
@@ -1392,7 +1534,10 @@ async function adjustDialog(p) {
     await backend.adjustStock(shopId, p.code, n, form.reason.value);
     toast(`บันทึก ${p.name} = ${qtyFmt(n)}`); setTimeout(() => current === 'stock' && viewStock(), 0);
   });
-  $$('[data-step]', f).forEach((b) => b.addEventListener('click', () => { f.counted.value = round2((Number(f.counted.value) || 0) + Number(b.dataset.step)); }));
+  const label = () => { const n = Number(f.counted.value); $('#adjSave', f).textContent = Number.isFinite(n) && n !== p.stock ? `บันทึก ${qtyFmt(p.stock)} → ${qtyFmt(n)}` : 'บันทึก'; };
+  $$('[data-step]', f).forEach((b) => b.addEventListener('click', () => { f.counted.value = round2((Number(f.counted.value) || 0) + Number(b.dataset.step)); label(); }));
+  f.counted.addEventListener('input', label);
+  $('#adjReason', f).addEventListener('click', (e) => { const b = e.target.closest('[data-reason]'); if (!b) return; f.reason.value = b.dataset.reason; $$('[data-reason]', f).forEach((x) => x.setAttribute('aria-pressed', x === b)); });
   $('#adjMin', f).addEventListener('click', (e) => {
     const b = e.target.closest('[data-min]'); if (!b) return;
     const set = (v) => { newMin = v; $('#adjMin', f).innerHTML = minButtons(v, 'data-min'); };
@@ -1576,6 +1721,7 @@ function productForm(p) {
       <label class="field">ราคาขาย (บาท)<input type="number" name="price" min="0" step="0.01" value="${p.price || ''}"></label>
       <label class="field">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
     </div>
+    <label class="field">บาร์โค้ด <span class="muted" style="font-weight:400">(ไม่ใส่ก็ได้ · ยิงเครื่องสแกนใส่ช่องนี้ได้)</span><input type="text" name="barcode" value="${esc(p.barcode || '')}" inputmode="numeric" autocomplete="off" style="font-family:var(--mono)"></label>
     <label class="field">เตือนเมื่อเหลือไม่ถึง <span class="muted" style="font-weight:400">(ว่าง / 0 = ไม่เตือน)</span><input type="number" name="minStock" min="0" step="any" value="${p.minStock || ''}" placeholder="เช่น 10"></label>
     <label class="row" style="font-weight:600;min-height:44px"><input type="checkbox" name="noStock" ${p.noStock ? 'checked' : ''} style="width:22px;height:22px;accent-color:var(--green)"> ไม่มีสต๊อก (งานบริการ เช่น ไถแปร โดรนพ่นยา)</label>
     ${canSeeCost() ? `<label class="field">ราคาทุน (บาท) <span class="muted" style="font-weight:400">· ${isManager() ? 'พนักงานมองไม่เห็นช่องนี้' : 'ปลดล็อกด้วย PIN ถึง ' + new Date(costUnlockedUntil).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</span><input type="number" name="cost" min="0" step="0.01" value="${p.cost || ''}"></label>`
@@ -1606,7 +1752,7 @@ function productForm(p) {
     const code = v.code.trim();
     if (!/^[^/]+$/.test(code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
     if (isNew && liveProducts().some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
-    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, minStock: Math.max(0, Number(v.minStock) || 0), noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
+    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, minStock: Math.max(0, Number(v.minStock) || 0), barcode: (v.barcode || '').trim(), noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
     if (canSeeCost() && v.cost !== undefined) rec.cost = round2(Number(v.cost) || 0);
     else if (isNew) rec.cost = 0;
     if (isNew) rec.group = '';
@@ -1633,6 +1779,80 @@ function viewProducts() {
   $('#ptab').addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) productForm(liveProducts().find((p) => p.code === b.dataset.e)); });
   $('#addp').addEventListener('click', () => productForm());
   draw(); $('#pq2').focus();
+}
+
+// ---------------- one search box for customers, products and bills ----------------
+let searchQ = '', searchF = '';
+const recentKey = () => 'recentSearch:' + shopId;
+const recentList = () => { try { return JSON.parse(localStorage.getItem(recentKey()) || '[]'); } catch { return []; } };
+function rememberSearch(q) { q = q.trim(); if (q.length < 2) return; try { localStorage.setItem(recentKey(), JSON.stringify([q, ...recentList().filter((x) => x !== q)].slice(0, 8))); } catch { /* ignore */ } }
+// Wrap the first match of q in <mark> (text is escaped first).
+function hl(text, q) {
+  const t = String(text ?? ''); const i = q ? norm(t).indexOf(norm(q)) : -1;
+  if (i < 0 || norm(t).length !== t.length) return esc(t);
+  return esc(t.slice(0, i)) + '<mark>' + esc(t.slice(i, i + q.length)) + '</mark>' + esc(t.slice(i + q.length));
+}
+function addToCart(code) {
+  const p = data.products.find((x) => x.code === code); if (!p) return;
+  const ex = cart.lines.find((l) => l.code === code);
+  if (ex) ex.qty = round2(ex.qty + 1); else cart.lines.push({ code, qty: 1, price: p.price });
+  toast(`เพิ่ม ${p.name} ลงบิลแล้ว`);
+}
+function viewSearch(arg) {
+  if (arg) searchQ = decodeURIComponent(arg);
+  const voice = 'webkitSpeechRecognition' in window || 'SpeechRecognition' in window;
+  view.innerHTML = `<section class="card search-card">
+    <label class="search-box">${icon('search', 22)}<input type="search" id="gq" value="${esc(searchQ)}" placeholder="ค้นหาลูกค้า สินค้า หรือเลขบิล" autocomplete="off" aria-label="ค้นหา">
+      ${voice ? `<button type="button" class="icon-btn" id="gmic" aria-label="ค้นหาด้วยเสียง">${icon('mic', 20)}</button>` : ''}</label>
+    <div class="row" id="gchips" style="gap:8px"></div>
+    <div id="gout"></div></section>`;
+  const cm = custBy(), debts = customerDebts(data, todayIso()), stale = new Set(stalePayers(data, todayIso()).map((r) => r.code));
+  const draw = () => {
+    const q = $('#gq').value.trim(); searchQ = q;
+    if (!q) {
+      const rec = recentList();
+      $('#gchips').innerHTML = '';
+      $('#gout').innerHTML = rec.length ? `<div class="g-head">ค้นหาล่าสุด</div><div class="row" style="gap:8px">${rec.map((r) => `<button type="button" class="chip" data-recent="${esc(r)}">${esc(r)}</button>`).join('')}</div>` : '<div class="muted">พิมพ์ชื่อลูกค้า หมู่บ้าน เบอร์โทร ชื่อสินค้า บาร์โค้ด หรือเลขที่บิล</div>';
+      return;
+    }
+    const n = norm(q);
+    const custs = data.customers.filter((c) => !c.deleted && (norm(c.name).includes(n) || norm(c.zone).includes(n) || c.code.startsWith(q) || (c.phone || '').replace(/\D/g, '').includes(q.replace(/\D/g, '') || '@'))).slice(0, 30);
+    const prods = liveProducts().filter((p) => norm(p.name).includes(n) || p.code.startsWith(q) || (p.barcode && p.barcode === q)).slice(0, 30);
+    const codes = new Set(custs.map((c) => c.code));
+    const docs = [...data.bills.map((b) => ({ ...b, kind: 'bill' })), ...data.receipts.map((r) => ({ ...r, kind: 'rcp' }))]
+      .filter((d) => norm(d.no).includes(n) || codes.has(d.customerCode)).sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 30);
+    const tabs = [['', 'ทั้งหมด', custs.length + prods.length + docs.length], ['c', 'ลูกค้า', custs.length], ['p', 'สินค้า', prods.length], ['b', 'บิล', docs.length]];
+    $('#gchips').innerHTML = tabs.map(([k, t, c]) => `<button type="button" class="chip" data-gf="${k}" aria-pressed="${searchF === k}">${t} ${c}</button>`).join('');
+    const show = (k) => !searchF || searchF === k;
+    const cRow = (c) => { const d = debts.get(c.code); return `<a class="g-row" href="#debt/${encodeURIComponent(c.code)}"><span class="g-av">${esc((c.name || '?').replace(/^(ลุง|ป้า|น้า|นาย|นาง|พี่|แม่)/, '').trim().charAt(0) || '?')}</span>
+      <span class="g-main"><b>${hl(c.name, q)}</b><small>${hl(c.zone || '', q)} · ${hl(c.code, q)}${c.phone ? ' · ' + esc(c.phone) : ''}</small></span>
+      <span class="g-end">${d ? `<b class="mono" style="color:var(--orange-ink)">${money(d.total)}</b><small${stale.has(c.code) ? ' style="color:var(--red)"' : ''}>${stale.has(c.code) ? 'ไม่ชำระเกิน 6 เดือน' : `ค้าง ${d.bills.length} บิล`}</small>` : '<small style="color:var(--green)">ไม่มีหนี้</small>'}</span></a>`; };
+    const pRow = (p) => `<button type="button" class="g-row" data-addp="${esc(p.code)}"><span class="g-main"><b>${hl(p.name, q)}</b><small>${hl(p.code, q)} · คงเหลือ ${p.noStock ? 'บริการ' : qtyFmt(p.stock) + ' ' + esc(p.unit)}</small></span>
+      <span class="g-end"><b class="mono">${p.price ? money(p.price) : '-'}</b><small style="color:var(--green)">+ ลงบิลขาย</small></span></button>`;
+    const dRow = (d) => `<button type="button" class="g-row" data-doc="${esc(d.no)}" data-kind="${d.kind}"><span class="g-main"><b class="mono">${hl(d.no, q)}</b><small>${thDate(d.date)} · ${d.kind === 'rcp' ? 'ใบเสร็จ · ' : ''}${esc(custLabel(d.customerCode))}</small></span>
+      <span class="g-end"><span class="g-tag ${d.kind === 'rcp' ? 'ok' : d.status === 'open' ? 'warn' : d.status === 'cancelled' || d.status === 'void' ? 'bad' : ''}">${d.kind === 'rcp' ? (d.status === 'void' ? 'ยกเลิก' : 'รับเงิน') : d.status === 'open' ? 'ค้าง' : d.status === 'cancelled' ? 'ยกเลิก' : d.type === 'credit' ? 'ชำระแล้ว' : 'เงินสด'}</span><b class="mono">${money(d.total)}</b></span></button>`;
+    const looksNo = /^\d{2}-(BS|RP)\d{6,}/i.test(q) && !docs.some((d) => d.no === q.toUpperCase());
+    $('#gout').innerHTML = [
+      show('c') && custs.length ? `<div class="g-head">ลูกค้า</div><div class="g-list">${custs.map(cRow).join('')}</div>` : '',
+      show('p') && prods.length ? `<div class="g-head">สินค้า</div><div class="g-list">${prods.map(pRow).join('')}</div>` : '',
+      show('b') && docs.length ? `<div class="g-head">บิลและใบเสร็จ</div><div class="g-list">${docs.map(dRow).join('')}</div>` : '',
+      looksNo ? `<button type="button" class="btn" id="gold">ค้นหาเลข ${esc(q.toUpperCase())} ในบิลเก่าทั้งหมด</button>` : '',
+    ].join('') || '<div class="empty">ไม่พบ ลองพิมพ์สั้นลง เช่น 2–3 ตัวอักษร</div>';
+    $$('#gchips [data-gf]').forEach((b) => b.addEventListener('click', () => { searchF = b.dataset.gf; draw(); }));
+    $$('#gout [data-addp]').forEach((b) => b.addEventListener('click', () => { rememberSearch(q); addToCart(b.dataset.addp); location.hash = 'sale'; }));
+    $$('#gout [data-doc]').forEach((b) => b.addEventListener('click', () => { rememberSearch(q); const d = docs.find((x) => x.no === b.dataset.doc); if (d.kind === 'bill') showBill(d); else location.hash = 'debt/' + encodeURIComponent(d.customerCode); }));
+    $$('#gout a.g-row').forEach((a) => a.addEventListener('click', () => rememberSearch(q)));
+    $('#gold')?.addEventListener('click', async () => { const r = await backend.findBills(shopId, { no: q.toUpperCase() }).catch(() => []); if (r[0]) showBill(r[0]); else toast('ไม่พบบิลเลขนี้'); });
+  };
+  $('#gq').addEventListener('input', draw);
+  $('#gq').addEventListener('keydown', (e) => { if (e.key === 'Enter') rememberSearch(e.target.value); });
+  $('#gout').addEventListener('click', (e) => { const b = e.target.closest('[data-recent]'); if (b) { $('#gq').value = b.dataset.recent; draw(); } });
+  $('#gmic')?.addEventListener('click', () => {
+    const R = window.SpeechRecognition || window.webkitSpeechRecognition; const r = new R(); r.lang = 'th-TH'; r.interimResults = false;
+    $('#gmic').classList.add('on'); r.onresult = (e) => { $('#gq').value = e.results[0][0].transcript.trim(); draw(); rememberSearch($('#gq').value); };
+    r.onend = () => $('#gmic')?.classList.remove('on'); r.onerror = () => toast('ฟังเสียงไม่ได้ ลองพิมพ์แทน'); r.start();
+  });
+  draw(); $('#gq').focus();
 }
 
 // ---------------- change many prices at once (owner) ----------------
