@@ -105,6 +105,7 @@ export async function listShops() {
   for (const id of me.shops || []) { const d = await wrap(() => fb.getDoc(shopDoc(id))); if (d.exists()) out.push({ ...DEFAULT_SETTINGS, ...d.data(), id }); }
   return out;
 }
+export async function renameShop(shopId, label) { if (!label) throw new Error('ใส่ชื่อเรียกร้าน'); await wrap(() => fb.updateDoc(shopDoc(shopId), { label })); }
 export async function createShop({ label }) {
   if (!label?.trim()) throw new Error('ใส่ชื่อเรียกร้าน');
   const shops = await listShops();

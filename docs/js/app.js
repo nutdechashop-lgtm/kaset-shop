@@ -112,9 +112,12 @@ function drawHeader() {
   if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${VIEW_AS.map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
-    ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
+    ${inShop && shops.length > 1 ? `<label class="row" style="gap:6px">ร้าน <select id="jumpShop" class="hdr-select" aria-label="สลับไปร้านอื่น">${shops.map((s) => `<option value="${esc(s.id)}" ${s.id === shopId ? 'selected' : ''}>${esc(s.label || s.name || s.id)}</option>`).join('')}</select></label>` : ''}
+    ${inShop && (user.role === 'admin' || shops.length > 1) ? `<button class="btn small hdr" id="switchShop">${user.role === 'admin' ? 'ภาพรวมทุกร้าน' : 'เปลี่ยนร้าน'}</button>` : ''}
     ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
-  $('#switchShop')?.addEventListener('click', () => { leaveShop(); viewShopPicker(); });
+  $('#switchShop')?.addEventListener('click', () => { leaveShop(); location.hash = ''; viewShopPicker(); });
+  // Jump to the same page in another shop.
+  $('#jumpShop')?.addEventListener('change', (e) => { const id = e.target.value; leaveShop(); enterShop(id); });
   $('#viewAs')?.addEventListener('change', (e) => { viewAs = e.target.value; lsSet('viewAs', viewAs); render(); });
   $('#previewBar')?.remove();
   if (inShop && previewing()) {
@@ -191,6 +194,7 @@ async function viewLogin() {
   });
 }
 
+let pickerTab = 'shops';
 async function viewShopPicker() {
   drawHeader();
   view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดร้าน…</div></div>';
@@ -198,31 +202,76 @@ async function viewShopPicker() {
   const last = lsGet('lastShop');
   if (shops.length === 1 && user.role !== 'admin') return enterShop(shops[0].id);
   if (!shops.length && user.role !== 'admin') { view.innerHTML = '<div class="note">รหัสนี้ยังไม่ได้ผูกกับร้านไหน ติดต่อแอดมิน</div>'; return; }
-  view.innerHTML = `<section class="card" style="max-width:640px;margin:0 auto;width:100%">
-    <h2>เลือกร้าน</h2>
-    ${shops.length ? `<div style="display:flex;flex-direction:column;gap:8px">${shops.map((s) => `<button class="btn shop-btn" data-shop="${esc(s.id)}">
-      <span class="row" style="justify-content:space-between;width:100%"><span><b>${esc(s.label || s.name || s.id)}</b> <span class="muted">${esc(s.name && s.label ? s.name : '')}</span></span><span class="mono muted">${esc(s.prefix || '')}${s.id === last ? ' · ล่าสุด' : ''}</span></span>
-      ${user.role === 'admin' ? `<span class="ov" data-ov="${esc(s.id)}"><span class="spinner"></span></span>` : ''}</button>`).join('')}</div>
-      ${user.role === 'admin' && shops.length > 1 ? '<div class="stat ov-total" id="ovTotal"></div>' : ''}`
-      : '<div class="muted">ยังไม่มีร้าน เพิ่มร้านแรกด้านล่าง</div>'}
-    ${user.role === 'admin' ? `<form id="nf" class="row" style="margin-top:8px"><input type="text" name="label" placeholder="ชื่อเรียกร้าน เช่น ร้านปุ๋ย" required style="flex:1;min-width:200px"><button class="btn primary">+ เพิ่มร้าน</button></form>
-      <div class="muted" style="font-size:13px">เพิ่มร้านแล้วสร้างรหัสเจ้าของร้าน · เจ้าของร้านเป็นคนตั้งชื่อร้าน ที่อยู่ และหัวบิลเอง</div>` : ''}
-    <div class="err hidden" id="perr"></div>
-  </section>`;
-  $$('[data-shop]').forEach((b) => b.addEventListener('click', () => enterShop(b.dataset.shop)));
-  // Super-admin: today and debts of every shop at a glance.
-  if (user.role === 'admin' && shops.length) {
-    const tot = { sales: 0, paid: 0, debt: 0, pending: 0 };
-    let done = 0;
-    for (const sh of shops) {
-      backend.shopOverview(sh.id).then((o) => {
-        const sales = o.today.cash + o.today.credit;
-        Object.assign(tot, { sales: tot.sales + sales, paid: tot.paid + o.today.paid, debt: tot.debt + o.debt, pending: tot.pending + o.pending });
-        const el = $(`[data-ov="${sh.id}"]`);
-        if (el) el.innerHTML = `<span>ขายวันนี้ <b>${money(sales)}</b></span><span>รับชำระ <b>${money(o.today.paid)}</b></span><span>ลูกหนี้ <b>${money(o.debt)}</b> (${o.debtors} คน)</span>${o.overdue ? `<span>ค้างเกิน 6 เดือน <b>${o.overdue}</b> บิล</span>` : ''}${o.pending ? `<span class="badge">${o.pending} รออนุมัติ</span>` : ''}`;
-      }).catch((e) => { const el = $(`[data-ov="${sh.id}"]`); if (el) el.textContent = 'โหลดสรุปไม่ได้: ' + e.message; })
-        .finally(() => { if (++done === shops.length && $('#ovTotal')) $('#ovTotal').innerHTML = `<b>รวมทุกร้าน</b><span>ขายวันนี้ <b>${money(tot.sales)}</b></span><span>รับชำระ <b>${money(tot.paid)}</b></span><span>ลูกหนี้รวม <b>${money(tot.debt)}</b></span>${tot.pending ? `<span>รออนุมัติ <b>${tot.pending}</b></span>` : ''}`; });
-    }
+  const admin = user.role === 'admin';
+  const name = (s) => esc(s.label || s.name || s.id);
+  if (!admin) {
+    view.innerHTML = `<section class="card" style="max-width:640px;margin:0 auto;width:100%"><h2>เลือกร้าน</h2>
+      <div style="display:flex;flex-direction:column;gap:8px">${shops.map((s) => `<button class="btn shop-btn" data-shop="${esc(s.id)}">
+        <span class="row" style="justify-content:space-between;width:100%"><span><b>${name(s)}</b> <span class="muted">${esc(s.name && s.label ? s.name : '')}</span></span><span class="mono muted">${esc(s.prefix || '')}${s.id === last ? ' · ล่าสุด' : ''}</span></span></button>`).join('')}</div></section>`;
+    $$('[data-shop]').forEach((b) => b.addEventListener('click', () => enterShop(b.dataset.shop)));
+    return;
+  }
+  // Super-admin control panel: every shop at a glance with one-tap shortcuts, plus all login codes in one place.
+  view.innerHTML = `<div class="admin-panel">
+    <div class="tabs" role="tablist"><a href="#" role="tab" data-ptab="shops" aria-selected="${pickerTab === 'shops'}">ร้านทั้งหมด (${shops.length})</a><a href="#" role="tab" data-ptab="users" aria-selected="${pickerTab === 'users'}">รหัสพนักงานทุกร้าน</a></div>
+    <div id="pbody"></div></div>`;
+  $$('[data-ptab]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); pickerTab = a.dataset.ptab; viewShopPicker(); }));
+  const body = $('#pbody');
+  if (pickerTab === 'users') return viewUsers({ box: body });
+  const go = (id, page) => { location.hash = page || ''; enterShop(id); };
+  body.innerHTML = `<section class="card" style="margin:0"><h2>รวมทุกร้าน · วันนี้ ${thDate(todayIso())}</h2><div class="stats" id="ovTotal"><div class="stat"><div class="k">กำลังรวมยอด…</div><div class="v"><span class="spinner"></span></div></div></div></section>
+    <div class="shop-grid">${shops.map((s) => `<section class="card shop-card" data-card="${esc(s.id)}">
+      <div class="row" style="justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="min-width:0"><div class="shop-title">${name(s)} <span class="mono muted" style="font-size:14px">${esc(s.prefix || '')}</span>${s.id === last ? ' <span class="pill">ล่าสุด</span>' : ''}</div>
+          <div class="muted" style="font-size:13px">${esc(s.name && s.name !== s.label ? s.name : s.name ? '' : 'ยังไม่ได้ตั้งชื่อร้าน / หัวบิล')}</div></div>
+        <button class="btn small" data-rename="${esc(s.id)}" title="เปลี่ยนชื่อเรียกร้าน">แก้ชื่อ</button>
+      </div>
+      <div class="shop-nums" data-ov="${esc(s.id)}"><span class="spinner"></span></div>
+      <div class="shop-acts">
+        <button class="btn primary" data-go="${esc(s.id)}" data-shop="${esc(s.id)}" data-page="">เข้าร้าน</button>
+        <button class="btn" data-go="${esc(s.id)}" data-page="approve">รออนุมัติ <span class="badge hidden" data-pend="${esc(s.id)}"></span></button>
+        <button class="btn" data-go="${esc(s.id)}" data-page="report">รายงาน</button>
+        <button class="btn" data-go="${esc(s.id)}" data-page="debt">ลูกหนี้</button>
+        <button class="btn" data-go="${esc(s.id)}" data-page="bank">ส่งธนาคาร</button>
+        <button class="btn" data-staff="${esc(s.id)}">รหัสพนักงาน</button>
+        <button class="btn" data-go="${esc(s.id)}" data-page="settings">ตั้งค่าร้าน</button>
+      </div></section>`).join('')}</div>
+    <section class="card" style="max-width:640px">
+      <h2>เพิ่มร้านใหม่</h2>
+      <form id="nf" class="row"><input type="text" name="label" placeholder="ชื่อเรียกร้าน เช่น ร้านปุ๋ย" required style="flex:1;min-width:200px"><button class="btn primary">+ เพิ่มร้าน</button></form>
+      <div class="muted" style="font-size:13px">เพิ่มร้านแล้วสร้างรหัสเจ้าของร้าน · เจ้าของร้านเป็นคนตั้งชื่อร้าน ที่อยู่ และหัวบิลเอง</div>
+      <div class="err hidden" id="perr"></div>
+    </section>`;
+  $$('[data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go, b.dataset.page)));
+  $$('[data-staff]').forEach((b) => b.addEventListener('click', () => { pickerTab = 'users'; usersFilter = b.dataset.staff; viewShopPicker(); }));
+  $$('[data-rename]').forEach((b) => b.addEventListener('click', () => {
+    const sh = shops.find((x) => x.id === b.dataset.rename);
+    openDialog(`<h2>ชื่อเรียกร้าน</h2><div class="muted" style="font-size:14px">ชื่อที่ใช้เรียกในโปรแกรม (หัวบิลเจ้าของร้านตั้งเองที่หน้าตั้งค่าร้าน)</div>
+      <label class="field">ชื่อเรียก<input type="text" name="label" value="${esc(sh.label || '')}" required></label>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+      await backend.renameShop(sh.id, f.label.value.trim());
+      toast('เปลี่ยนชื่อแล้ว'); setTimeout(viewShopPicker, 0);
+    });
+  }));
+  const tot = { sales: 0, paid: 0, debt: 0, debtors: 0, overdue: 0, pending: 0 };
+  let done = 0;
+  const tile = (k, v, warn) => `<div class="stat${warn ? ' warn' : ''}"><div class="k">${k}</div><div class="v">${v}</div></div>`;
+  for (const sh of shops) {
+    backend.shopOverview(sh.id).then((o) => {
+      const sales = o.today.cash + o.today.credit;
+      tot.sales += sales; tot.paid += o.today.paid; tot.debt += o.debt; tot.debtors += o.debtors; tot.overdue += o.overdue; tot.pending += o.pending;
+      const el = $(`[data-ov="${sh.id}"]`);
+      if (el) el.innerHTML = `<div><small>ขายวันนี้</small><b class="mono">${money(sales)}</b></div><div><small>รับชำระวันนี้</small><b class="mono">${money(o.today.paid)}</b></div>
+        <div><small>ลูกหนี้ (${o.debtors} คน)</small><b class="mono">${money(o.debt)}</b></div><div class="${o.overdue ? 'bad' : ''}"><small>ค้างเกิน 6 เดือน</small><b class="mono">${o.overdue} บิล</b></div>`;
+      const pb = $(`[data-pend="${sh.id}"]`); if (pb && o.pending) { pb.textContent = o.pending; pb.classList.remove('hidden'); }
+      if (o.pending) $(`[data-card="${sh.id}"]`)?.classList.add('has-pend');
+    }).catch((e) => { const el = $(`[data-ov="${sh.id}"]`); if (el) el.innerHTML = `<span class="err">โหลดสรุปไม่ได้: ${esc(e.message)}</span>`; })
+      .finally(() => {
+        if (++done !== shops.length || !$('#ovTotal')) return;
+        $('#ovTotal').innerHTML = tile('ขายวันนี้', money(tot.sales)) + tile('รับชำระวันนี้', money(tot.paid)) + tile(`ลูกหนี้รวม · ${tot.debtors} คน`, money(tot.debt))
+          + tile('ค้างเกิน 6 เดือน', tot.overdue + ' บิล', tot.overdue > 0) + tile('รออนุมัติ', tot.pending + ' รายการ', tot.pending > 0);
+      });
   }
   $('#nf')?.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -1922,18 +1971,25 @@ function viewPrices() {
 }
 
 // ---------------- staff codes ----------------
-async function viewUsers() {
-  view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลด…</div></div>';
+let usersFilter = '';
+async function viewUsers(opts = {}) {
+  const box = opts.box || view;
+  const again = () => viewUsers(opts);
+  box.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลด…</div></div>';
   let users;
-  try { users = await backend.listUsers(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  try { users = await backend.listUsers(); } catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const shopLabel = (id) => shops.find((s) => s.id === id)?.label || id;
-  const asAdmin = role() === 'admin';
+  const asAdmin = opts.box ? user.role === 'admin' : role() === 'admin';
   const canDelete = user.role === 'admin' && !previewing(); // only the real super-admin
   const myShops = asAdmin ? shops : shops.filter((s) => s.id === shopId || user.shops?.includes(s.id));
   const roles = asAdmin ? ['owner', 'manager', 'staff', 'admin'] : ['staff'];
   if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
-  view.innerHTML = `<section class="card">
+  const all = users;
+  if (asAdmin && usersFilter && shops.some((s) => s.id === usersFilter)) users = users.filter((u) => u.role === 'admin' || (u.shops || []).includes(usersFilter));
+  const chips = asAdmin && shops.length > 1 ? `<div class="chips" role="group" aria-label="กรองตามร้าน">${[['', 'ทุกร้าน', all.length], ...shops.map((s) => [s.id, s.label || s.name || s.id, all.filter((u) => (u.shops || []).includes(s.id)).length])].map(([id, t, n]) => `<button type="button" class="chip" data-uf="${esc(id)}" aria-pressed="${id === usersFilter}">${esc(t)} <span class="muted">${n}</span></button>`).join('')}</div>` : '';
+  box.innerHTML = `<section class="card">
     <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2><button class="btn primary" id="addu">+ เพิ่มรหัส</button></div>
+    ${chips}
     <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ</th><th></th></tr>
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
@@ -1950,10 +2006,11 @@ async function viewUsers() {
       <div class="err hidden" id="pinerr"></div>
       <div class="row"><button class="btn">เปลี่ยน PIN</button></div>
     </form></section>` : ''}`;
+  $$('[data-uf]', box).forEach((b) => b.addEventListener('click', () => { usersFilter = b.dataset.uf; again(); }));
   $$('[data-toggle]').forEach((b) => b.addEventListener('click', async () => {
     const on = b.dataset.active !== '1';
     if (!confirm(on ? 'เปิดใช้รหัสนี้?' : 'ปิดรหัสนี้? คนที่ใช้รหัสนี้จะเข้าระบบไม่ได้')) return;
-    try { await backend.setUserActive(b.dataset.toggle, on); viewUsers(); } catch (e) { toast(e.message); }
+    try { await backend.setUserActive(b.dataset.toggle, on); again(); } catch (e) { toast(e.message); }
   }));
   $$('[data-deluser]').forEach((b) => b.addEventListener('click', () => {
     const { deluser: uid, code, name } = b.dataset;
@@ -1965,7 +2022,7 @@ async function viewUsers() {
       <div class="row"><button class="btn primary" value="ok" style="background:var(--red);border-color:var(--red)">ลบรหัสนี้</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
       if (f.confirm.value.trim() !== code) throw new Error('พิมพ์รหัสไม่ตรง');
       await backend.deleteUser(uid);
-      toast(`ลบรหัส ${code} แล้ว`); setTimeout(viewUsers, 0);
+      toast(`ลบรหัส ${code} แล้ว`); setTimeout(again, 0);
     });
   }));
   // Super-admin only: change someone's position (and which shops they work at).
@@ -1987,7 +2044,7 @@ async function viewUsers() {
       const role = fd.get('role'), list = fd.getAll('shops');
       if (!list.length) throw new Error('เลือกร้านอย่างน้อย 1 ร้าน');
       await backend.setUserRole(u.uid, role, list);
-      toast(`ย้าย ${u.name} เป็น${ROLE[role]}แล้ว`); setTimeout(viewUsers, 0);
+      toast(`ย้าย ${u.name} เป็น${ROLE[role]}แล้ว`); setTimeout(again, 0);
     });
   }));
   $('#addu')?.addEventListener('click', () => openDialog(`<h2>เพิ่มรหัสเข้าระบบ</h2>
@@ -1998,13 +2055,13 @@ async function viewUsers() {
     <label class="field">ชื่อ<input type="text" name="name" required></label>
     <label class="field">หน้าที่<select name="role">${roles.map((r) => `<option value="${r}">${ROLE[r]}</option>`).join('')}</select></label>
     <fieldset style="border:1px solid var(--line);border-radius:10px;padding:10px 12px"><legend style="font-size:14px;font-weight:600">ร้าน</legend>
-      ${myShops.map((s) => `<label class="row" style="min-height:40px"><input type="checkbox" name="shops" value="${esc(s.id)}" ${s.id === shopId ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(s.label || s.name || s.id)}</label>`).join('')}
+      ${myShops.map((s) => `<label class="row" style="min-height:40px"><input type="checkbox" name="shops" value="${esc(s.id)}" ${s.id === (shopId || usersFilter) ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(s.label || s.name || s.id)}</label>`).join('')}
     </fieldset>
     <div class="err hidden dlg-err"></div>
     <div class="row"><button class="btn primary" value="save">สร้างรหัส</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
     const fd = new FormData(f);
     await backend.createUser({ code: fd.get('code'), name: fd.get('name'), pin: fd.get('pin'), role: fd.get('role'), shops: fd.getAll('shops') });
-    toast('สร้างรหัสแล้ว'); viewUsers();
+    toast('สร้างรหัสแล้ว'); again();
   }));
   $('#pinf')?.addEventListener('submit', async (e) => {
     e.preventDefault();

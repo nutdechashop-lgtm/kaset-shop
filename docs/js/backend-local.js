@@ -32,6 +32,7 @@ export async function openShop(shopId, onChange) {
 export function closeShop() {}
 
 export async function saveSettings(shopId, s) { await storeSettings(s); }
+export async function renameShop(shopId, label) { const s = await getSettings(DEFAULT_SETTINGS); await storeSettings({ ...s, label }); }
 
 export async function commitSale(shopId, settings, input) {
   const bill = createSale(data, settings, input);
