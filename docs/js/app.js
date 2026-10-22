@@ -20,14 +20,18 @@ const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
 const custBy = () => new Map(data.customers.map((c) => [c.code, c]));
 const custLabel = (code, map = custBy()) => { const c = map.get(code); return c ? c.name : (code ? 'รหัส ' + code : 'ลูกค้าทั่วไป'); };
 const APP_NAME = 'DREAMSHOP_KASET';
-const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', staff: 'พนักงาน', secretary: 'พนักงาน' };
+const ROLE = { admin: 'แอดมินใหญ่', owner: 'เจ้าของร้าน', manager: 'ผู้จัดการร้าน', staff: 'พนักงาน', secretary: 'พนักงาน' };
+const VIEW_AS = [['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['manager', 'ผู้จัดการร้าน'], ['staff', 'พนักงาน']];
 // The super-admin can preview the program as an owner / staff member sees it (to check before a shop goes live).
 let viewAs = lsGetSafe('viewAs') || '';
 if (viewAs === 'secretary') viewAs = 'staff';
 function lsGetSafe(k) { try { return localStorage.getItem(k); } catch { return null; } }
 const role = () => (user?.role === 'admin' && viewAs ? viewAs : user?.role);
 const previewing = () => user?.role === 'admin' && !!viewAs;
-const isManager = () => ['admin', 'owner'].includes(role());
+// A shop manager (ผู้จัดการร้าน) works like the owner, except reports, approvals, login codes and the debt summary.
+const isManager = () => ['admin', 'owner', 'manager'].includes(role());
+const isOwnerLevel = () => ['admin', 'owner'].includes(role());
+const canSee = (flag) => !flag || (flag === 'owner' ? isOwnerLevel() : isManager());
 // Shop settings belong to the shop owner; the super-admin only looks.
 const canEditSettings = () => user?.role === 'owner' || backend.mode === 'local';
 const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
@@ -41,7 +45,7 @@ function toast(msg) {
 // ---------------- header / routing ----------------
 const NAV = [
   ['home', 'หน้าแรก', true], ['sale', 'ขาย'], ['debt', 'ลูกหนี้ / รับชำระ'], ['bills', 'ค้นหาบิล'], ['customers', 'ลูกค้า'], ['products', 'สินค้า'], ['stock', 'สต๊อก / โอน'], ['close', 'ปิดร้าน'],
-  ['report', 'รายงาน', true], ['approve', 'รออนุมัติ', true], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', true], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
+  ['report', 'รายงาน', 'owner'], ['approve', 'รออนุมัติ', 'owner'], ['bank', 'ลูกหนี้ส่งธนาคาร', true], ['users', 'รหัสพนักงาน', 'owner'], ['backup', 'นำเข้า / สำรองข้อมูล', true], ['settings', 'ตั้งค่าร้าน', true],
 ];
 // Sub-pages that light up a main menu item.
 // Line icons (24px) used by the phone tab bar and big buttons.
@@ -70,15 +74,15 @@ function drawTabbar() {
   const top = NAV_PARENT[current] || current;
   const pending = pendingRequests().length;
   bar.innerHTML = phoneTabs().map(([k, t]) => `<a href="#${k}" ${top === k ? 'aria-current="page"' : ''}>${icon(k === 'close' ? 'close' : k)}<span>${t}</span></a>`).join('')
-    + `<button type="button" id="moreBtn" ${phoneTabs().some(([k]) => k === top) ? '' : 'aria-current="page"'}>${icon('more')}<span>เมนู</span>${pending && isManager() ? `<i class="dot">${pending}</i>` : ''}</button>`;
+    + `<button type="button" id="moreBtn" ${phoneTabs().some(([k]) => k === top) ? '' : 'aria-current="page"'}>${icon('more')}<span>เมนู</span>${pending && isOwnerLevel() ? `<i class="dot">${pending}</i>` : ''}</button>`;
   $('#moreBtn').onclick = openMenuSheet;
 }
 function openMenuSheet() {
   const tabs = new Set(phoneTabs().map(([k]) => k));
   const pending = pendingRequests().length;
-  const items = [['search', 'ค้นหา'], ...NAV.filter(([k, , mgr]) => (!mgr || isManager()) && !tabs.has(k))];
+  const items = [['search', 'ค้นหา'], ...NAV.filter(([k, , mgr]) => canSee(mgr) && !tabs.has(k))];
   const f = openDialog(`<div class="sheet-head"><div><b>${esc(user.name)}</b> <span class="muted">· ${ROLE[user.role] || ''}</span></div><div class="muted" style="font-size:13px">${esc(settings.name || settings.label || '')}</div></div>
-    ${user.role === 'admin' ? `<label class="field">ดูโปรแกรมในมุมมองของ<select id="sheetViewAs">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
+    ${user.role === 'admin' ? `<label class="field">ดูโปรแกรมในมุมมองของ<select id="sheetViewAs">${VIEW_AS.map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     <div class="sheet-list">${items.map(([k, t]) => `<a href="#${k}" data-go>${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}<span class="chev">${icon('chev', 20)}</span></a>`).join('')}</div>
     <div class="row">${user.role === 'admin' || shops.length > 1 ? '<button type="button" class="btn" id="sheetShop">เปลี่ยนร้าน</button>' : ''}${backend.mode === 'cloud' ? '<button type="button" class="btn" id="sheetOut">ออกจากระบบ</button>' : ''}<button class="btn" value="cancel">ปิด</button></div>`);
   $$('[data-go]', f).forEach((a) => a.addEventListener('click', () => dlg.close()));
@@ -95,7 +99,7 @@ const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
 function drawHeader() {
   const inShop = !!shop;
   const pending = inShop ? pendingRequests().length : 0;
-  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => !mgr || isManager()).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
+  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => canSee(mgr)).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   const nAlert = alertsOn() ? currentAlerts().count : 0;
   $('#bell')?.remove(); $('#netPill')?.remove(); $('#hdrSearch')?.remove();
@@ -107,7 +111,7 @@ function drawHeader() {
   if (typeof drawImportBadge === 'function') setTimeout(drawImportBadge, 0);
   if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
   $('#who').innerHTML = user ? `<span>${esc(user.name)} · ${ROLE[user.role] || ''}</span>
-    ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${[['', 'แอดมินใหญ่'], ['owner', 'เจ้าของร้าน'], ['staff', 'พนักงาน']].map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
+    ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${VIEW_AS.map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? '<button class="btn small hdr" id="switchShop">เปลี่ยนร้าน</button>' : ''}
     ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
   $('#switchShop')?.addEventListener('click', () => { leaveShop(); viewShopPicker(); });
@@ -126,7 +130,7 @@ let current = 'sale';
 function render() {
   if (!shop) return;
   let [name, arg] = (location.hash.slice(1) || defaultPage()).split('/');
-  if (!routes[name] || (NAV.find((n) => n[0] === (NAV_PARENT[name] || name))?.[2] && !isManager())) name = defaultPage();
+  if (!routes[name] || !canSee(NAV.find((n) => n[0] === (NAV_PARENT[name] || name))?.[2])) name = defaultPage();
   current = name;
   drawHeader(); markNav();
   $('#today').textContent = 'วันที่ ' + thDate(todayIso());
@@ -1016,17 +1020,17 @@ function viewHome() {
       ${tile('รับชำระหนี้', money(s.today.paid), '#paid')}${tile('เงินเข้ารวม', money(s.today.moneyIn), '#paid')}
     </div>
   </section>
-  <section class="card">
+  ${isOwnerLevel() ? `<section class="card">
     <h2>ลูกหนี้</h2>
     <div class="stats">
       ${tile('ยอดค้างรวม (ต้น+ดอก)', money(s.debt), '#debt')}${tile('ลูกค้าที่ค้าง', s.debtors + ' คน', '#debt')}
       ${tile('ค้างเกิน 6 เดือน', s.overdue + ' บิล', '#overdue', s.overdue > 0)}${tile('ดอกเบี้ยถึงวันนี้', money(s.interest), '#debt')}
     </div>
-  </section>
+  </section>` : ''}
   <section class="card">
     <h2>ต้องจัดการ</h2>
     <div class="stats">
-      ${tile('รออนุมัติ', pendingRequests().length + ' รายการ', '#approve', pendingRequests().length > 0)}
+      ${isOwnerLevel() ? tile('รออนุมัติ', pendingRequests().length + ' รายการ', '#approve', pendingRequests().length > 0) : ''}
       ${tile('สินค้าใกล้หมด', s.lowStock + ' รายการ', '#stock/low', s.lowStock > 0)}
       ${tile('สต๊อกติดลบ', s.negativeStock + ' รายการ', '#stock', s.negativeStock > 0)}
       ${tile('สินค้ายังไม่มีราคา', s.noPrice + ' รายการ', '#products', s.noPrice > 0)}
@@ -1042,7 +1046,7 @@ function viewHome() {
 const alertsOn = () => !!shop && isManager() && isPhone();
 const notifySupported = () => 'Notification' in window && 'serviceWorker' in navigator;
 function currentAlerts() {
-  const req = pendingRequests().map((r) => ({ key: 'r:' + r.id, title: 'คำขอรออนุมัติ', body: `${r.byName || ''} ${({ edit: 'ขอแก้ไขบิล', cancel: 'ขอยกเลิกบิล', rate: 'ขอเปลี่ยนอัตราดอก', voidReceipt: 'ขอยกเลิกใบเสร็จ', costPin: 'ขอดูราคาทุน' })[r.kind] || 'ส่งคำขอ'} ${r.billNo || r.receiptNo || r.productName || ''}`.trim(), url: '#approve' }));
+  const req = (isOwnerLevel() ? pendingRequests() : []).map((r) => ({ key: 'r:' + r.id, title: 'คำขอรออนุมัติ', body: `${r.byName || ''} ${({ edit: 'ขอแก้ไขบิล', cancel: 'ขอยกเลิกบิล', rate: 'ขอเปลี่ยนอัตราดอก', voidReceipt: 'ขอยกเลิกใบเสร็จ', costPin: 'ขอดูราคาทุน' })[r.kind] || 'ส่งคำขอ'} ${r.billNo || r.receiptNo || r.productName || ''}`.trim(), url: '#approve' }));
   const low = lowStock(data?.products).map((p) => ({ key: 'l:' + p.code, title: 'สินค้าใกล้หมด', body: `${p.name} เหลือ ${qtyFmt(p.stock)} ${p.unit} (เตือนเมื่อไม่ถึง ${qtyFmt(p.minStock)})`, url: '#stock/low' }));
   return { req, low, count: req.length + low.length };
 }
@@ -1129,6 +1133,7 @@ function withAudit(raw) {
   wrap('createUser', null, (c, r, u) => ({ action: 'เพิ่มรหัสเข้าระบบ', target: u.code, detail: `${u.name} · ${ROLE[u.role] || u.role}` }));
   wrap('setUserActive', null, (c, r, uid, on) => ({ action: on ? 'เปิดรหัส' : 'ปิดรหัส', target: uid }));
   wrap('deleteUser', null, (c, r, uid) => ({ action: 'ลบรหัสเข้าระบบ', target: uid }));
+  wrap('setUserRole', null, (c, r, uid, role) => ({ action: 'ย้ายตำแหน่ง', target: uid, detail: ROLE[role] || role }));
   wrap('replaceShopData', null, (c, r, sid, result) => ({ action: 'นำเข้าข้อมูลเก่า', detail: `ลูกค้า ${result.customers.length} · สินค้า ${result.products.length} · บิล ${result.bills.length}` }));
   wrap('restoreShop', null, (c, r, sid, bk) => ({ action: 'กู้คืนข้อมูล', detail: `จากไฟล์สำรองวันที่ ${bk.exportedAt ? new Date(bk.exportedAt).toLocaleString('th-TH') : '-'}` }));
   wrap('saveClose', null, (c, rec) => ({ action: 'ปิดร้าน', target: thDate(rec.date), detail: `ควรมี ${money(rec.expected)} · นับได้ ${money(rec.counted)} · ${rec.diff === 0 ? 'ตรง' : rec.diff < 0 ? 'ขาด ' + money(-rec.diff) : 'เกิน ' + money(rec.diff)}` }));
@@ -1141,7 +1146,7 @@ function withAudit(raw) {
 function viewHomePhone() {
   const today = todayIso();
   const s = shopSnapshot(data, today);
-  const nStale = stalePayers(data, today).length, nPend = pendingRequests().length;
+  const nStale = stalePayers(data, today).length, nPend = isOwnerLevel() ? pendingRequests().length : 0;
   const backupOld = !settings.lastBackupAt || daysBetween(settings.lastBackupAt.slice(0, 10), today) > 7;
   const todo = [
     [nPend, 'คำขอรออนุมัติ', '#approve', 'ok'], [s.lowStock, 'สินค้าใกล้หมด', '#stock/low', 'warn'], [s.negativeStock, 'สต๊อกติดลบ', '#stock', 'warn'],
@@ -1925,7 +1930,7 @@ async function viewUsers() {
   const asAdmin = role() === 'admin';
   const canDelete = user.role === 'admin' && !previewing(); // only the real super-admin
   const myShops = asAdmin ? shops : shops.filter((s) => s.id === shopId || user.shops?.includes(s.id));
-  const roles = asAdmin ? ['owner', 'staff', 'admin'] : ['staff'];
+  const roles = asAdmin ? ['owner', 'manager', 'staff', 'admin'] : ['staff'];
   if (!asAdmin) users = users.filter((u) => u.uid === user.uid || (u.shops || []).includes(shopId));
   view.innerHTML = `<section class="card">
     <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2><button class="btn primary" id="addu">+ เพิ่มรหัส</button></div>
@@ -1933,7 +1938,7 @@ async function viewUsers() {
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
       <td>${u.active ? '<span class="pill cash">ใช้งาน</span>' : '<span class="pill cancel">ปิด</span>'}</td>
-      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
+      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid && u.role !== 'admin' ? ` <button class="btn small" data-move="${esc(u.uid)}">ย้ายตำแหน่ง</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
   </section>
@@ -1961,6 +1966,28 @@ async function viewUsers() {
       if (f.confirm.value.trim() !== code) throw new Error('พิมพ์รหัสไม่ตรง');
       await backend.deleteUser(uid);
       toast(`ลบรหัส ${code} แล้ว`); setTimeout(viewUsers, 0);
+    });
+  }));
+  // Super-admin only: change someone's position (and which shops they work at).
+  $$('[data-move]').forEach((b) => b.addEventListener('click', () => {
+    const u = users.find((x) => x.uid === b.dataset.move); if (!u) return;
+    const cur = u.role === 'secretary' ? 'staff' : u.role;
+    openDialog(`<h2>ย้ายตำแหน่ง <span class="mono">${esc(u.code)}</span></h2>
+      <div>${esc(u.name)} · ตอนนี้เป็น <b>${ROLE[u.role] || esc(u.role)}</b></div>
+      <fieldset style="border:1px solid var(--line);border-radius:10px;padding:10px 12px"><legend style="font-size:14px;font-weight:600">ตำแหน่งใหม่</legend>
+        ${['owner', 'manager', 'staff'].map((r) => `<label class="row" style="min-height:44px"><input type="radio" name="role" value="${r}" ${r === cur ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> <b>${ROLE[r]}</b> <span class="muted" style="font-size:13px">${({ owner: 'เห็นทุกเมนู อนุมัติคำขอ จัดการรหัสพนักงาน', manager: 'เหมือนเจ้าของร้าน ยกเว้นรายงาน รออนุมัติ รหัสพนักงาน และสรุปลูกหนี้', staff: 'ขาย รับชำระ สต๊อก ปิดร้าน' })[r]}</span></label>`).join('')}
+      </fieldset>
+      <fieldset style="border:1px solid var(--line);border-radius:10px;padding:10px 12px"><legend style="font-size:14px;font-weight:600">ร้าน</legend>
+        ${shops.map((s) => `<label class="row" style="min-height:40px"><input type="checkbox" name="shops" value="${esc(s.id)}" ${(u.shops || []).includes(s.id) ? 'checked' : ''} style="width:20px;height:20px;accent-color:var(--green)"> ${esc(s.label || s.name || s.id)}</label>`).join('')}
+      </fieldset>
+      <div class="muted" style="font-size:13px">รหัสและ PIN เดิมใช้ต่อได้ · มีผลเมื่อคนนั้นเปิดโปรแกรมใหม่</div>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+      const fd = new FormData(f);
+      const role = fd.get('role'), list = fd.getAll('shops');
+      if (!list.length) throw new Error('เลือกร้านอย่างน้อย 1 ร้าน');
+      await backend.setUserRole(u.uid, role, list);
+      toast(`ย้าย ${u.name} เป็น${ROLE[role]}แล้ว`); setTimeout(viewUsers, 0);
     });
   }));
   $('#addu')?.addEventListener('click', () => openDialog(`<h2>เพิ่มรหัสเข้าระบบ</h2>

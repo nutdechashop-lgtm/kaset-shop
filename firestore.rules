@@ -9,7 +9,7 @@ service cloud.firestore {
     function isAdmin() { return active() && me().role == 'admin'; }
     function isOwner() { return active() && me().role == 'owner'; }
     function member(shopId) { return active() && (me().role == 'admin' || shopId in me().shops); }
-    function manager(shopId) { return member(shopId) && me().role in ['admin', 'owner']; }
+    function manager(shopId) { return member(shopId) && me().role in ['admin', 'owner', 'manager']; }
 
     // First super-admin: can be claimed once, never changed.
     match /config/main {

@@ -1,5 +1,5 @@
 // Online backend: Firebase Auth (code + PIN) and Firestore (one area per shop).
-//   users/{uid}                 { code, name, role: admin|owner|staff, shops: [shopId], active }
+//   users/{uid}                 { code, name, role: admin|owner|manager|staff, shops: [shopId], active }
 //   config/main                 { adminUid }  — first super-admin, created once
 //   shops/{shopId}              shop settings (name, address, bill prefix, default rate, …)
 //   shops/{shopId}/customers|products|bills|receipts|counters/{id}
@@ -443,6 +443,7 @@ export async function deleteUser(uid) {
   if (cfg.data()?.adminUid === uid) throw new Error('รหัสแอดมินใหญ่คนแรกลบไม่ได้');
   await wrap(() => fb.deleteDoc(fb.doc(db, 'users', uid)));
 }
+export async function setUserRole(uid, role, shops) { await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { role, shops })); }
 export async function setUserActive(uid, active) { await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { active })); }
 export async function changeMyPin(oldPin, newPin) {
   checkPin(newPin);
