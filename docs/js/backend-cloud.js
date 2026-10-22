@@ -79,7 +79,7 @@ export async function signIn(code, pin) {
   await applySessionRule(me);
   return me;
 }
-export async function signOut() { closeShop(); await fb.signOut(auth); me = null; flag.set(false); }
+export async function signOut() { await Promise.race([heartbeat('', true), new Promise((r) => setTimeout(r, 1500))]); closeShop(); await fb.signOut(auth); me = null; flag.set(false); }
 
 export async function bootstrapNeeded() {
   try { return !(await fb.getDoc(fb.doc(db, 'config', 'main'))).exists(); } catch { return false; }
@@ -417,9 +417,15 @@ export async function shopInfo(shopId) {
 }
 
 // ---------- users (codes) ----------
+// Who is using the program right now: each open copy stamps its own login every few minutes.
+export function heartbeat(shopId, away = false) {
+  if (!me?.uid) return Promise.resolve();
+  const device = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) ? 'มือถือ' : 'คอมพิวเตอร์';
+  return fb.updateDoc(fb.doc(db, 'users', me.uid), { lastSeen: fb.serverTimestamp(), seenShop: shopId || '', seenDevice: device, away }).catch(() => {});
+}
 export async function listUsers() {
   const s = await wrap(() => fb.getDocs(fb.collection(db, 'users')));
-  const all = s.docs.map((d) => ({ uid: d.id, ...d.data() }));
+  const all = s.docs.map((d) => { const u = d.data(); return { uid: d.id, ...u, lastSeen: u.lastSeen?.toMillis?.() || null }; });
   return me.role === 'admin' ? all : all.filter((u) => (u.shops || []).some((x) => me.shops.includes(x)));
 }
 // Create a login without signing the current user out (uses a temporary second Firebase app).

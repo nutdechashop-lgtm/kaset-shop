@@ -379,3 +379,11 @@ tr.mline.noprice { background: var(--orange-soft); }
 .shop-acts .btn { min-height: 42px; }
 .stat.warn .v { color: var(--orange, #B4530E); }
 @media (max-width: 700px) { .shop-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Login codes: who is online, last used */
+.seen { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 14px; }
+.seen.on b { color: var(--green, #1F5C40); }
+.seen-sub { font-size: 12px; color: var(--muted); padding-left: 16px; white-space: nowrap; }
+.dot-on, .dot-off { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.dot-on { background: #2FA05F; box-shadow: 0 0 0 3px rgba(47,160,95,.2); }
+.dot-off { background: #C9C5BA; }

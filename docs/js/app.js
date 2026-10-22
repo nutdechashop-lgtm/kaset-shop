@@ -196,7 +196,7 @@ async function viewLogin() {
 
 let pickerTab = 'shops';
 async function viewShopPicker() {
-  drawHeader();
+  drawHeader(); if (user) startBeat();
   view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดร้าน…</div></div>';
   try { shops = await backend.listShops(); } catch (e) { view.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
   const last = lsGet('lastShop');
@@ -280,6 +280,10 @@ async function viewShopPicker() {
   });
 }
 
+// Tell the server this login is in use (every 3 minutes while the program is open and on screen).
+let beatTimer = null;
+function beat() { if (user && document.visibilityState === 'visible') backend.heartbeat?.(shopId); }
+function startBeat() { if (beatTimer) return; beat(); beatTimer = setInterval(beat, 3 * 60 * 1000); document.addEventListener('visibilitychange', beat); }
 async function enterShop(id) {
   view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดข้อมูลร้าน…</div></div>';
   try {
@@ -290,6 +294,7 @@ async function enterShop(id) {
   resetCart();
   if (!settings.name && canEditSettings() && !location.hash) location.hash = 'settings';
   render();
+  startBeat(); beat();
   checkAlerts().catch(() => {});
   backend.flushPending?.(shopId).catch(() => {});
 }
@@ -1972,6 +1977,25 @@ function viewPrices() {
 
 // ---------------- staff codes ----------------
 let usersFilter = '';
+// Online = stamped within the last 6 minutes and didn't sign out.
+const ONLINE_MS = 6 * 60 * 1000;
+function agoText(ms) {
+  const m = Math.floor((Date.now() - ms) / 60000);
+  if (m < 1) return 'เมื่อสักครู่';
+  if (m < 60) return `${m} นาทีที่แล้ว`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} ชม.ที่แล้ว`;
+  const d = Math.floor(h / 24); if (d === 1) return 'เมื่อวาน ' + new Date(ms).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' }) + (d < 30 ? ` (${d} วันก่อน)` : '');
+}
+function seenCell(u, shopLabel) {
+  if (!u.active) return '<span class="pill cancel">ปิดรหัส</span>';
+  const isMe = u.uid === user.uid;
+  const online = isMe || (u.lastSeen && !u.away && Date.now() - u.lastSeen < ONLINE_MS);
+  const where = [u.seenDevice || '', u.seenShop ? shopLabel(u.seenShop) : ''].filter(Boolean).join(' · ');
+  if (online) return `<div class="seen on"><span class="dot-on"></span><b>กำลังใช้งาน</b>${isMe ? ' <span class="muted">(คุณ)</span>' : ''}</div>${where && !isMe ? `<div class="seen-sub">${esc(where)}</div>` : ''}`;
+  if (!u.lastSeen) return '<div class="seen"><span class="dot-off"></span>ยังไม่เคยเข้าใช้</div><div class="seen-sub">(หรือเข้าก่อนมีระบบนี้)</div>';
+  return `<div class="seen"><span class="dot-off"></span>ใช้ล่าสุด ${agoText(u.lastSeen)}</div><div class="seen-sub" title="${esc(new Date(u.lastSeen).toLocaleString('th-TH'))}">${esc(where)}</div>`;
+}
 async function viewUsers(opts = {}) {
   const box = opts.box || view;
   const again = () => viewUsers(opts);
@@ -1988,12 +2012,12 @@ async function viewUsers(opts = {}) {
   if (asAdmin && usersFilter && shops.some((s) => s.id === usersFilter)) users = users.filter((u) => u.role === 'admin' || (u.shops || []).includes(usersFilter));
   const chips = asAdmin && shops.length > 1 ? `<div class="chips" role="group" aria-label="กรองตามร้าน">${[['', 'ทุกร้าน', all.length], ...shops.map((s) => [s.id, s.label || s.name || s.id, all.filter((u) => (u.shops || []).includes(s.id)).length])].map(([id, t, n]) => `<button type="button" class="chip" data-uf="${esc(id)}" aria-pressed="${id === usersFilter}">${esc(t)} <span class="muted">${n}</span></button>`).join('')}</div>` : '';
   box.innerHTML = `<section class="card">
-    <div class="row" style="justify-content:space-between"><h2>รหัสเข้าระบบ</h2><button class="btn primary" id="addu">+ เพิ่มรหัส</button></div>
+    <div class="row" style="justify-content:space-between"><div><h2>รหัสเข้าระบบ</h2><div class="muted" style="font-size:14px"><span class="dot-on" style="display:inline-block;margin-right:6px"></span>กำลังใช้งาน ${users.filter((u) => u.active && (u.uid === user.uid || (u.lastSeen && !u.away && Date.now() - u.lastSeen < ONLINE_MS))).length} คน · <button type="button" class="btn link" id="ureload">รีเฟรช</button></div></div><button class="btn primary" id="addu">+ เพิ่มรหัส</button></div>
     ${chips}
-    <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ</th><th></th></tr>
+    <div class="scroll"><table><tr><th>รหัส</th><th>ชื่อ</th><th>หน้าที่</th><th>ร้าน</th><th>สถานะ / ใช้ล่าสุด</th><th></th></tr>
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
-      <td>${u.active ? '<span class="pill cash">ใช้งาน</span>' : '<span class="pill cancel">ปิด</span>'}</td>
+      <td>${seenCell(u, shopLabel)}</td>
       <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid && u.role !== 'admin' ? ` <button class="btn small" data-move="${esc(u.uid)}">ย้ายตำแหน่ง</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
@@ -2006,6 +2030,7 @@ async function viewUsers(opts = {}) {
       <div class="err hidden" id="pinerr"></div>
       <div class="row"><button class="btn">เปลี่ยน PIN</button></div>
     </form></section>` : ''}`;
+  $('#ureload', box)?.addEventListener('click', again);
   $$('[data-uf]', box).forEach((b) => b.addEventListener('click', () => { usersFilter = b.dataset.uf; again(); }));
   $$('[data-toggle]').forEach((b) => b.addEventListener('click', async () => {
     const on = b.dataset.active !== '1';

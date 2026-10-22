@@ -28,6 +28,9 @@ service cloud.firestore {
             && request.resource.data.shops.size() > 0
             && request.resource.data.shops.hasOnly(me().shops));
       allow update: if isAdmin()
+        // everyone stamps their own "last used" time
+        || (active() && uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen', 'seenShop', 'seenDevice', 'away']))
         || (isOwner() && resource.data.role in ['staff', 'secretary']
             && resource.data.shops.hasAny(me().shops)
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']));
