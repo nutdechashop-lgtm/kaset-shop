@@ -339,7 +339,7 @@ tr.mline.noprice { background: var(--orange-soft); }
 
 /* What was bought on each bill, shown with debts and receipts */
 .items-row td { border-top: 0 !important; padding-top: 0 !important; }
-.bill-items { display: flex; flex-direction: column; gap: 2px; font-size: 14px; color: #3d423a; padding: 2px 0 8px 10px; margin-left: 52px; border-left: 3px solid #DDD9CE; max-width: 640px; }
+.bill-items { display: flex; flex-direction: column; gap: 2px; font-size: 14px; color: var(--ink); padding: 2px 0 8px 10px; margin-left: 52px; border-left: 3px solid var(--line); max-width: 640px; }
 .bill-items > div { display: grid; grid-template-columns: minmax(0, 1fr) auto 90px; gap: 12px; align-items: baseline; }
 .bi-qty { color: #5C6158; white-space: nowrap; }
 .bi-amt { text-align: right; }
@@ -371,7 +371,7 @@ tr.mline.noprice { background: var(--orange-soft); }
 .shop-card.has-pend { box-shadow: inset 4px 0 0 var(--orange, #B4530E); }
 .shop-title { font-size: 19px; font-weight: 700; }
 .shop-nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-.shop-nums > div { background: var(--soft, #F0EDE5); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.shop-nums > div { background: var(--stat-bg); border-radius: 12px; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .shop-nums small { font-size: 12px; color: var(--muted); }
 .shop-nums b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; }
 .shop-nums .bad b { color: var(--red); }
@@ -386,7 +386,7 @@ tr.mline.noprice { background: var(--orange-soft); }
 .seen-sub { font-size: 12px; color: var(--muted); padding-left: 16px; white-space: nowrap; }
 .dot-on, .dot-off { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .dot-on { background: #2FA05F; box-shadow: 0 0 0 3px rgba(47,160,95,.2); }
-.dot-off { background: #C9C5BA; }
+.dot-off { background: var(--btn-line); }
 
 /* ---------- stock on the phone ---------- */
 .ps-head { display: flex; align-items: center; gap: 10px; }
