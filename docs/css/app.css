@@ -336,3 +336,12 @@ tr.mline.noprice { background: var(--orange-soft); }
 .big-step button:last-child { background: var(--green-soft); color: var(--green); }
 .big-step input { flex: 1; min-width: 0; height: 68px; min-height: 68px !important; border-radius: 18px !important; border: 2px solid var(--green) !important; text-align: center; font-family: var(--mono); font-size: 34px !important; font-weight: 600; }
 .chip[aria-pressed="true"] { background: var(--strong); color: var(--on-accent); }
+
+/* What was bought on each bill, shown with debts and receipts */
+.items-row td { border-top: 0 !important; padding-top: 0 !important; }
+.bill-items { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: #5C6158; padding: 2px 0 6px; }
+.bill-items b { font-weight: 600; color: #1C1F1A; }
+.bill-items i { font-style: normal; }
+#alloc .bill-items { font-size: 12px; padding: 2px 0 0; }
+.paper .p-items td { border-top: 0; padding-top: 0; font-size: 13px; color: #333; }
+@media (max-width: 700px) { .bill-items { font-size: 14px; flex-direction: column; gap: 2px; } }

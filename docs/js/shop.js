@@ -143,7 +143,7 @@ export function receivePayment(data, settings, input, opts = {}) {
   }
   // What the customer owed on every open bill at the moment of payment (printed on the receipt).
   const owed = open.slice().sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.no < b.no ? -1 : 1))
-    .map((b) => { const bal = billBalance(b, date); return { no: b.no, date: b.date, principal: bal.principal, interest: bal.interest, total: bal.total }; });
+    .map((b) => { const bal = billBalance(b, date); return { no: b.no, date: b.date, principal: bal.principal, interest: bal.interest, total: bal.total, items: (b.lines || []).map((l) => ({ name: l.name || '', qty: l.qty, unit: l.unit || '', amount: l.amount })) }; });
   const owedTotal = round2(owed.reduce((s, x) => s + x.total, 0));
   const receipt = {
     no, date, customerCode: input.customerCode, mode: input.mode === 'bills' ? 'bills' : 'amount',

@@ -310,7 +310,7 @@ function printReceipt(r) {
     ${paperHead('ใบเสร็จรับเงิน', `<div>วันที่ ${r.createdAt ? dt(r.createdAt) : dd(r.date)}</div>`)}
     ${custBox(r.customerCode, `<div><b>เลขที่</b> ${esc(r.no)}</div><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(r.date)}</div><div><b>รับเงินโดย</b> ${esc(r.by || '-')}</div>`)}
     <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>บิลอ้างอิง</th><th style="width:28mm">วันที่บิล</th><th class="r" style="width:26mm">เงินต้น</th><th class="r" style="width:24mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>
-    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>`).join('')}
+    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>${(() => { const it = x.items || billItems(data.bills.find((b) => b.no === x.no)); return it.length ? `<tr class="p-items"><td></td><td colspan="5">${it.map((l) => `${esc(l.name)} ${qtyFmt(l.qty)} ${esc(l.unit)} = ${money(l.amount)}`).join(' · ')}</td></tr>` : ''; })()}`).join('')}
       <tr class="p-foot"><td colspan="3" class="r">${r.owed ? 'รวมยอดค้าง' : 'รวม'}</td><td class="r">${money(sum('principal'))}</td><td class="r">${money(sum('interest'))}</td><td class="r">${money(owedTotal)}</td></tr></tbody></table>
     <div class="p-box p-sum">
       <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(r.total)})</div></div>
@@ -633,6 +633,9 @@ function viewDebt(code) {
   draw(); $('#dq').focus();
 }
 
+// What was bought on a bill, for showing beside debts and receipts.
+const billItems = (b) => (b?.lines || b?.items || []).map((l) => ({ name: l.name || data.products.find((p) => p.code === l.code)?.name || l.code, qty: l.qty, unit: l.unit || '', amount: l.amount }));
+const itemsHtml = (items) => (items.length ? `<div class="bill-items">${items.map((l) => `<span><b>${esc(l.name)}</b> ${qtyFmt(l.qty)} ${esc(l.unit)} <i class="mono">${money(l.amount)}</i></span>`).join('')}</div>` : '');
 function viewDebtor(code) {
   const asOf = todayIso();
   const c = data.customers.find((x) => x.code === code);
@@ -684,7 +687,8 @@ function viewDebtor(code) {
         <td class="mono"><button class="btn link" data-view="${esc(b.no)}">${esc(b.no)}</button></td><td>${thDate(b.date)}</td><td class="num">${b.rate}</td>
         <td class="num">${graceLeft ? `<span class="pill">${graceLeft}</span>` : days}</td>
         <td class="num">${money(b.balance.principal)}</td><td class="num">${money(b.balance.interest)}</td><td class="num"><b>${money(b.balance.total)}</b></td>
-        <td>${pendingRequests().some((r) => r.billNo === b.no && r.kind === 'rate') ? '<span class="pill">รออนุมัติ</span>' : `<button class="btn small" data-rate="${esc(b.no)}" title="เปลี่ยนอัตราดอก">เปลี่ยน %</button>`}</td></tr>`;
+        <td>${pendingRequests().some((r) => r.billNo === b.no && r.kind === 'rate') ? '<span class="pill">รออนุมัติ</span>' : `<button class="btn small" data-rate="${esc(b.no)}" title="เปลี่ยนอัตราดอก">เปลี่ยน %</button>`}</td></tr>
+        <tr class="items-row"><td></td><td colspan="8">${itemsHtml(billItems(b))}</td></tr>`;
     }).join('');
   $$('[data-view]').forEach((x) => x.addEventListener('click', () => showBill(data.bills.find((b) => b.no === x.dataset.view))));
   $$('[data-rate]').forEach((x) => x.addEventListener('click', () => rateDialog(data.bills.find((b) => b.no === x.dataset.rate), () => viewDebtor(code))));
@@ -700,7 +704,7 @@ function viewDebtor(code) {
     }
     const rows = res ? res.rows.filter((r) => r.payInterest || r.payPrincipal) : [];
     $('#alloc').innerHTML = rows.length ? `<tr><th>บิลที่ถูกตัด</th><th class="num">ตัดดอกเบี้ย</th><th class="num">ตัดเงินต้น</th><th class="num">เงินต้นคงเหลือ</th></tr>`
-      + rows.map((r) => `<tr><td class="mono">${esc(r.no)}</td><td class="num">${money(r.payInterest)}</td><td class="num">${money(r.payPrincipal)}</td><td class="num">${r.principalLeft > 0 ? money(r.principalLeft) : '<span class="pill cash">ปิดบิล</span>'}</td></tr>`).join('')
+      + rows.map((r) => `<tr><td><span class="mono">${esc(r.no)}</span>${itemsHtml(billItems(open.find((b) => b.no === r.no)))}</td><td class="num">${money(r.payInterest)}</td><td class="num">${money(r.payPrincipal)}</td><td class="num">${r.principalLeft > 0 ? money(r.principalLeft) : '<span class="pill cash">ปิดบิล</span>'}</td></tr>`).join('')
       + `<tr><td><b>รวม</b></td><td class="num"><b>${money(res.totalInterest)}</b></td><td class="num"><b>${money(res.totalPrincipal)}</b></td><td class="num">${res.change > 0 ? `เงินทอน <b>${money(res.change)}</b>` : ''}</td></tr>` : '';
   };
   $$('[data-m]').forEach((b) => b.addEventListener('click', () => {
