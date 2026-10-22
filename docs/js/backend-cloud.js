@@ -310,6 +310,13 @@ export async function commitPayment(shopId, settings, input) {
 
 export async function saveCustomer(shopId, c) { await wrap(() => fb.setDoc(sub(shopId, 'customers', c.code), c, { merge: true })); }
 // Low-stock alert level for many products at once (0 = off).
+export async function setCategory(shopId, codes, category) {
+  for (let i = 0; i < codes.length; i += 400) {
+    const b = fb.writeBatch(db);
+    codes.slice(i, i + 400).forEach((code) => b.set(sub(shopId, 'products', code), { category: category || '', updatedBy: me.name }, { merge: true }));
+    await wrap(() => b.commit());
+  }
+}
 export async function setMinStock(shopId, codes, minStock) {
   for (let i = 0; i < codes.length; i += 400) {
     const b = fb.writeBatch(db);

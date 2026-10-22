@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { salesReport, closeSummary, stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { categoryList, DEFAULT_CATEGORIES, salesReport, closeSummary, stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -184,5 +184,10 @@ assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', s
   assert.equal(rep.totals.profit, 40); assert.equal(rep.totals.noCostLines, 1);
   assert.equal(rep.paid.interest, 20); assert.equal(rep.paid.noSplit, 1); assert.equal(rep.items[0].code, 'p'); assert.equal(rep.items[0].qty, 3);
   assert.equal(rep.monthly[0].profit, 40);
+}
+{ // product categories
+  assert.deepEqual(categoryList({}, []), DEFAULT_CATEGORIES);
+  assert.deepEqual(categoryList({ categories: ['ข', 'ก'] }, [{ category: 'ค' }, { category: 'ก' }, { category: 'ง', deleted: true }]), ['ข', 'ก', 'ค']);
+  assert.deepEqual(categoryList({ categories: [] }, []), []);
 }
 console.log('ALL SHOP CHECKS PASSED');

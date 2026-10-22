@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers, closeSummary, salesReport } from './shop.js';
+import { categoryList, overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers, closeSummary, salesReport } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart, addDays } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -1176,6 +1176,7 @@ function withAudit(raw) {
     const d = diffs(old, p, [['name', 'ชื่อ'], ['price', 'ราคา', money], ['cost', 'ราคาทุน', money], ['stock', 'สต๊อก'], ['unit', 'หน่วย']]);
     return d.length ? { action: d.some((x) => x.startsWith('ราคา ')) ? 'แก้ราคาสินค้า' : d.some((x) => x.startsWith('สต๊อก')) ? 'แก้สต๊อก' : 'แก้ไขสินค้า', target: `${p.code} ${old.name}`, detail: d.join(' · ') } : null;
   });
+  wrap('setCategory', null, (c, r, sid, codes, cat) => ({ action: 'ย้ายหมวดสินค้า', target: `${codes.length} รายการ`, detail: cat ? 'ไปหมวด ' + cat : 'เป็น ยังไม่มีหมวด' }));
   wrap('setPrices', null, (c, r, sid, changes, note) => ({ action: 'ปรับราคาหลายรายการ', target: `${changes.length} รายการ`, detail: (note ? note + ' · ' : '') + changes.slice(0, 30).map((x) => `${x.name || x.code} ${money(x.old)}→${money(x.price)}`).join(', ') + (changes.length > 30 ? ' …' : '') }));
   wrap('adjustStock', (sid, code) => ({ ...prod(code) }), (old, r, sid, code, counted, reason) => ({ action: 'ปรับสต๊อก', target: `${code} ${old?.name || ''}`, detail: `${qtyFmt(old?.stock)} → ${qtyFmt(counted)}${reason ? ' · ' + reason : ''}` }));
   wrap('saveCustomer', (sid, c) => { const o = data?.customers.find((x) => x.code === c.code); return o ? { ...o } : null; }, (old, r, sid, c) => {
@@ -1501,7 +1502,7 @@ async function viewClose(arg) {
 }
 
 // ---------------- stock: count / adjust and transfer to other shops ----------------
-let stockQ = '', stockF = '';
+let stockQ = '', stockF = '', stockCat = '';
 function viewStock(arg) {
   if (isPhone()) return stockPhone(arg);
   const tab = arg === 'transfer' ? 'transfer' : arg === 'alert' ? 'alert' : 'count';
@@ -1517,16 +1518,19 @@ function stockCount() {
   $('#stockBody').innerHTML = `<section class="card">
     <input type="search" id="sq" placeholder="ค้นหาสินค้า" autocomplete="off" style="font-size:18px;min-height:52px" value="${esc(stockQ)}">
     <div class="row"><button class="chip" data-f="">ทั้งหมด</button><button class="chip" data-f="low">ใกล้หมด (${nLow})</button><button class="chip" data-f="neg">ติดลบ</button></div>
+    <div class="cat-chips" id="scats"></div>
     <div id="sl" class="stock-list"></div></section>`;
   const draw = () => {
     $$('#stockBody [data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === stockF));
-    const list = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!stockF || (stockF === 'neg' ? p.stock < 0 : isLow(p))))
-      .sort((a, b) => a.name.localeCompare(b.name, 'th')).slice(0, 80);
+    const base = liveProducts().filter((p) => !p.noStock && stockMatch(p, stockQ) && (!stockF || (stockF === 'neg' ? p.stock < 0 : isLow(p))));
+    $('#scats').innerHTML = catChips(base, stockCat);
+    const list = base.filter((p) => inCat(p, stockCat)).sort((a, b) => a.name.localeCompare(b.name, 'th')).slice(0, 80);
     $('#sl').innerHTML = list.length ? list.map((p) => `<button class="stock-item" data-c="${esc(p.code)}"><span><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}</span> ${minTag(p)}</span><span class="stock-n${p.stock < 0 ? ' neg' : isLow(p) ? ' low' : ''}">${qtyFmt(p.stock)}</span></button>`).join('')
       : `<div class="empty">${stockF === 'low' ? 'ไม่มีสินค้าใกล้หมด · ตั้งจุดเตือนได้ที่แท็บ "ตั้งเตือนใกล้หมด"' : 'ไม่พบสินค้า'}</div>`;
   };
   $('#sq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
   $$('#stockBody [data-f]').forEach((b) => b.addEventListener('click', () => { stockF = b.dataset.f; draw(); }));
+  $('#scats').addEventListener('click', (e) => { const b = e.target.closest('[data-cat-f]'); if (b) { stockCat = b.dataset.catF; draw(); } });
   $('#sl').addEventListener('click', (e) => { const b = e.target.closest('[data-c]'); if (b) adjustDialog(liveProducts().find((p) => p.code === b.dataset.c)); });
   draw();
 }
@@ -1698,12 +1702,14 @@ function stockPhone(arg) {
     </div>
     ${stockSheetMode === 'count' ? '<div class="ps-mode">โหมดนับสต๊อก · แตะสินค้าแล้วใส่จำนวนที่นับได้ <button type="button" class="btn small" id="countOff">เลิกนับ</button></div>' : ''}
     <div class="ps-chips" role="group" aria-label="กรองรายการ"><button class="chip" data-f="">ทั้งหมด ${all.length}</button><button class="chip warn" data-f="low">ใกล้หมด ${nLow}</button><button class="chip bad" data-f="out">หมด ${nOut}</button></div>
+    <div class="cat-chips scroll-x" id="scats" role="group" aria-label="หมวดหมู่"></div>
     <div id="sl" class="ps-list"></div>`;
   const rank = (p) => (p.stock <= 0 ? 0 : isLow(p) ? 1 : 2);
   const draw = () => {
     $$('[data-f]').forEach((x) => x.setAttribute('aria-pressed', x.dataset.f === stockF));
-    const list = all.filter((p) => stockMatch(p, stockQ) && (!stockF || (stockF === 'out' ? p.stock <= 0 : stockF === 'low' ? isLow(p) && p.stock > 0 : true)))
-      .sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
+    const base = all.filter((p) => stockMatch(p, stockQ) && (!stockF || (stockF === 'out' ? p.stock <= 0 : stockF === 'low' ? isLow(p) && p.stock > 0 : true)));
+    $('#scats').innerHTML = catChips(base, stockCat);
+    const list = base.filter((p) => inCat(p, stockCat)).sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'th')).slice(0, 80);
     $('#sl').innerHTML = list.length ? list.map((p) => { const r = rank(p); return `<button class="ps-row${r === 0 ? ' out' : r === 1 ? ' low' : ''}" data-c="${esc(p.code)}">
       <span class="ps-name"><b>${esc(p.name)}</b><small>${r === 0 ? 'หมดแล้ว · ' : r === 1 ? 'ใกล้หมด · ' : ''}${p.minStock > 0 ? `เตือนเมื่อไม่ถึง ${qtyFmt(p.minStock)}` : 'ยังไม่ตั้งเตือน'}</small></span>
       <span class="ps-qty"><b class="mono">${qtyFmt(p.stock)}</b><small>${esc(p.unit)}</small></span></button>`; }).join('')
@@ -1711,6 +1717,7 @@ function stockPhone(arg) {
   };
   $('#sq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
   $$('[data-f]').forEach((b) => b.addEventListener('click', () => { stockF = stockF === b.dataset.f ? '' : b.dataset.f; draw(); }));
+  $('#scats').addEventListener('click', (e) => { const b = e.target.closest('[data-cat-f]'); if (b) { stockCat = b.dataset.catF; draw(); } });
   $('#countMode').addEventListener('click', () => { stockSheetMode = stockSheetMode === 'count' ? 'in' : 'count'; stockPhone(); if (stockSheetMode === 'count') $('#sq')?.focus(); });
   $('#countOff')?.addEventListener('click', () => { stockSheetMode = 'in'; stockPhone(); });
   $('#sl').addEventListener('click', (e) => { const b = e.target.closest('[data-c]'); if (b) stockSheet(liveProducts().find((p) => p.code === b.dataset.c), stockSheetMode); });
@@ -1827,6 +1834,7 @@ function stockAlertPhone() {
   view.innerHTML = `${phoneHead('ตั้งเตือนใกล้หมด', '#stock', 'เจ้าของร้านได้แจ้งเตือนเมื่อเหลือต่ำกว่านี้')}
     <label class="search-box ps-search">${icon('search', 22)}<input type="search" id="aq" placeholder="ค้นหาสินค้า" autocomplete="off" value="${esc(stockQ)}" aria-label="ค้นหาสินค้า"></label>
     <div class="ps-chips" id="achips"></div>
+    <div class="cat-chips scroll-x" id="acats" role="group" aria-label="หมวดหมู่"></div>
     <div class="muted" style="font-size:13px">ติ๊กหลายรายการ แล้วกดตัวเลขด้านล่างครั้งเดียว · หรือแตะปุ่มด้านขวาทีละรายการ</div>
     <div class="row" style="gap:8px"><button type="button" class="btn small" id="aall">เลือกทั้งหมดที่แสดง</button><button type="button" class="btn small" id="anone">ไม่เลือก</button></div>
     <section class="card ps-card" id="alist"></section>
@@ -1837,7 +1845,9 @@ function stockAlertPhone() {
     const a = all();
     $('#achips').innerHTML = [['none', 'ยังไม่ตั้ง', a.filter((p) => !(p.minStock > 0)).length], ['set', 'ตั้งแล้ว', a.filter((p) => p.minStock > 0).length], ['all', 'ทั้งหมด', a.length]]
       .map(([k, t, n]) => `<button class="chip" data-af="${k}" aria-pressed="${alertF === k}">${t} ${n}</button>`).join('');
-    shown = a.filter((p) => stockMatch(p, stockQ) && (alertF === 'none' ? !(p.minStock > 0) : alertF === 'set' ? p.minStock > 0 : true)).sort((x, y) => x.name.localeCompare(y.name, 'th')).slice(0, 100);
+    const base = a.filter((p) => stockMatch(p, stockQ) && (alertF === 'none' ? !(p.minStock > 0) : alertF === 'set' ? p.minStock > 0 : true));
+    $('#acats').innerHTML = catChips(base, stockCat);
+    shown = base.filter((p) => inCat(p, stockCat)).sort((x, y) => x.name.localeCompare(y.name, 'th')).slice(0, 100);
     $('#alist').innerHTML = shown.length ? shown.map((p) => `<div class="ps-arow${picked.has(p.code) ? ' on' : ''}"><label><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''}><span class="ps-name"><b>${esc(p.name)}</b><small class="${isLow(p) ? 'low-txt' : ''}">เหลือ ${qtyFmt(p.stock)} ${esc(p.unit)}${isLow(p) ? ' · ใกล้หมดแล้ว' : ''}</small></span></label>
       <button type="button" class="ps-minpill${p.minStock > 0 ? ' set' : ''}" data-one="${esc(p.code)}">${p.minStock > 0 ? `ไม่ถึง ${qtyFmt(p.minStock)}` : 'ไม่เตือน'} ▾</button></div>`).join('') : '<div class="empty">ไม่มีสินค้าในกลุ่มนี้</div>';
     const n = picked.size;
@@ -1850,6 +1860,7 @@ function stockAlertPhone() {
   };
   $('#aq').addEventListener('input', (e) => { stockQ = e.target.value; draw(); });
   $('#achips').addEventListener('click', (e) => { const b = e.target.closest('[data-af]'); if (b) { alertF = b.dataset.af; draw(); } });
+  $('#acats').addEventListener('click', (e) => { const b = e.target.closest('[data-cat-f]'); if (b) { stockCat = b.dataset.catF; draw(); } });
   $('#aall').addEventListener('click', () => { shown.forEach((p) => picked.add(p.code)); draw(); });
   $('#anone').addEventListener('click', () => { picked.clear(); draw(); });
   $('#alist').addEventListener('change', (e) => { const c = e.target.dataset.pick; if (!c) return; e.target.checked ? picked.add(c) : picked.delete(c); draw(); });
@@ -2036,6 +2047,7 @@ function productForm(p) {
       <label class="field">หน่วย<input type="text" name="unit" value="${esc(p.unit)}" placeholder="กระสอบ, ขวด, ไร่"></label>
     </div>
     <label class="field">ชื่อสินค้า<input type="text" name="name" value="${esc(p.name)}" required></label>
+    <label class="field">หมวดหมู่<select name="category">${catOptions(isNew ? (prodCat && prodCat !== NO_CAT ? prodCat : '') : p.category)}</select></label>
     <div class="form-grid">
       <label class="field">ราคาขาย (บาท)<input type="number" name="price" min="0" step="0.01" value="${p.price || ''}"></label>
       <label class="field">สต๊อกคงเหลือ<input type="number" name="stock" step="any" value="${p.stock ?? 0}"></label>
@@ -2071,33 +2083,124 @@ function productForm(p) {
     const code = v.code.trim();
     if (!/^[^/]+$/.test(code)) throw new Error('รหัสห้ามมีเครื่องหมาย /');
     if (isNew && liveProducts().some((x) => x.code === code)) throw new Error('รหัสนี้มีแล้ว');
-    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, minStock: Math.max(0, Number(v.minStock) || 0), barcode: (v.barcode || '').trim(), noStock: !!v.noStock, priceFromHistory: false, deleted: false, updatedBy: user.name };
+    const rec = { code, name: v.name.trim(), unit: v.unit.trim() || 'หน่วย', price: round2(Number(v.price) || 0), stock: Number(v.stock) || 0, minStock: Math.max(0, Number(v.minStock) || 0), barcode: (v.barcode || '').trim(), noStock: !!v.noStock, category: v.category === '__new' ? '' : (v.category || ''), priceFromHistory: false, deleted: false, updatedBy: user.name };
     if (canSeeCost() && v.cost !== undefined) rec.cost = round2(Number(v.cost) || 0);
     else if (isNew) rec.cost = 0;
     if (isNew) rec.group = '';
     await backend.saveProduct(shopId, rec);
     toast('บันทึกสินค้าแล้ว'); viewProducts();
   });
+  hookNewCategory(dlg);
 }
+// ---------------- product categories ----------------
+const NO_CAT = '__none';
+let prodCat = '';
+const cats = () => categoryList(settings, data.products);
+const catOptions = (cur) => `<option value="">— ยังไม่มีหมวด —</option>${cats().map((c) => `<option value="${esc(c)}" ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('')}<option value="__new">+ เพิ่มหมวดใหม่…</option>`;
+// "+ เพิ่มหมวดใหม่…" in any category <select>: ask for the name and pick it.
+function hookNewCategory(root) {
+  $$('select[name=category], select[data-cat]', root).forEach((sel) => {
+    let last = sel.value;
+    sel.addEventListener('change', () => {
+      if (sel.value !== '__new') { last = sel.value; return; }
+      const name = (prompt('ชื่อหมวดหมู่ใหม่ เช่น เมล็ดพันธุ์') || '').trim();
+      if (!name) { sel.value = last; return; }
+      if (![...sel.options].some((o) => o.value === name)) sel.querySelector('option[value="__new"]').insertAdjacentHTML('beforebegin', `<option value="${esc(name)}">${esc(name)}</option>`);
+      sel.value = last = name;
+      if (isManager() && !cats().includes(name)) saveCategories([...cats(), name]).catch(() => {});
+    });
+  });
+}
+async function saveCategories(list) {
+  await backend.saveSettings(shopId, { ...settings, categories: list });
+  settings = { ...settings, categories: list };
+}
+function manageCategories(done) {
+  let list = [...cats()];
+  const count = (c) => liveProducts().filter((p) => p.category === c).length;
+  const f = openDialog(`<h2>จัดการหมวดหมู่สินค้า</h2>
+    <div class="muted" style="font-size:14px">เรียงลำดับ แก้ชื่อ หรือลบหมวด · ลบหมวดแล้วสินค้าในหมวดนั้นจะกลายเป็น "ยังไม่มีหมวด"</div>
+    <div id="catList" class="cat-list"></div>
+    <div class="row"><input type="text" id="catNew" placeholder="ชื่อหมวดใหม่ เช่น เมล็ดพันธุ์" style="flex:1;min-width:160px"><button type="button" class="btn" id="catAdd">+ เพิ่มหมวด</button></div>
+    <div class="err hidden dlg-err"></div>
+    <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async () => {
+    const renames = list.filter((x) => x.from && x.from !== x.name);
+    const removed = cats().filter((c) => !list.some((x) => (x.from || x.name) === c));
+    for (const r of renames) await backend.setCategory(shopId, liveProducts().filter((p) => p.category === r.from).map((p) => p.code), r.name);
+    for (const c of removed) { const codes = liveProducts().filter((p) => p.category === c).map((p) => p.code); if (codes.length) await backend.setCategory(shopId, codes, ''); }
+    await saveCategories(list.map((x) => x.name));
+    toast('บันทึกหมวดหมู่แล้ว'); setTimeout(done, 0);
+  });
+  list = list.map((c) => ({ name: c, from: c }));
+  const draw = () => {
+    $('#catList', f).innerHTML = list.map((x, i) => `<div class="cat-row"><span class="cat-name"><b>${esc(x.name)}</b> <span class="muted">${x.from ? count(x.from) + ' รายการ' : 'ใหม่'}</span></span>
+      <button type="button" class="btn small" data-up="${i}" ${i ? '' : 'disabled'} aria-label="เลื่อนขึ้น">↑</button><button type="button" class="btn small" data-down="${i}" ${i < list.length - 1 ? '' : 'disabled'} aria-label="เลื่อนลง">↓</button>
+      <button type="button" class="btn small" data-ren="${i}">แก้ชื่อ</button><button type="button" class="btn small" data-rm="${i}" style="color:var(--red)">ลบ</button></div>`).join('') || '<div class="empty">ยังไม่มีหมวด</div>';
+  };
+  $('#catList', f).addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const i = +(b.dataset.up ?? b.dataset.down ?? b.dataset.ren ?? b.dataset.rm);
+    if (b.dataset.up) [list[i - 1], list[i]] = [list[i], list[i - 1]];
+    else if (b.dataset.down) [list[i + 1], list[i]] = [list[i], list[i + 1]];
+    else if (b.dataset.ren) { const n = (prompt('ชื่อหมวดใหม่', list[i].name) || '').trim(); if (n && !list.some((x, k) => k !== i && x.name === n)) list[i].name = n; }
+    else if (b.dataset.rm) { const c = list[i].from ? count(list[i].from) : 0; if (!c || confirm(`ลบหมวด "${list[i].name}"? สินค้า ${c} รายการในหมวดนี้จะกลายเป็น "ยังไม่มีหมวด"`)) list.splice(i, 1); }
+    draw();
+  });
+  $('#catAdd', f).addEventListener('click', () => { const n = $('#catNew', f).value.trim(); if (!n || list.some((x) => x.name === n)) return; list.push({ name: n }); $('#catNew', f).value = ''; draw(); });
+  draw();
+}
+// Category chips with counts; '' = all, NO_CAT = products without a category.
+function catChips(products, active, attr = 'data-cat-f') {
+  const n = (c) => products.filter((p) => (c === NO_CAT ? !p.category || !cats().includes(p.category) && !p.category : p.category === c)).length;
+  const none = products.filter((p) => !p.category).length;
+  return `<button type="button" class="chip" ${attr}="" aria-pressed="${!active}">ทุกหมวด ${products.length}</button>${cats().map((c) => `<button type="button" class="chip" ${attr}="${esc(c)}" aria-pressed="${active === c}">${esc(c)} <span class="muted">${n(c)}</span></button>`).join('')}${none ? `<button type="button" class="chip" ${attr}="${NO_CAT}" aria-pressed="${active === NO_CAT}">ยังไม่มีหมวด <span class="muted">${none}</span></button>` : ''}`;
+}
+const inCat = (p, c) => !c || (c === NO_CAT ? !p.category : p.category === c);
 function viewProducts() {
+  const picked = new Set();
   view.innerHTML = `<section class="card">
-    <div class="row" style="justify-content:space-between"><h2>สินค้า (${liveProducts().length})</h2><span class="row">${isManager() ? '<a class="btn" href="#prices">ปรับราคาหลายรายการ</a>' : ''}<button class="btn primary" id="addp">+ เพิ่มสินค้า</button></span></div>
+    <div class="row" style="justify-content:space-between"><h2>สินค้า (${liveProducts().length})</h2><span class="row">${isManager() ? '<button class="btn" id="mcat">จัดการหมวดหมู่</button><a class="btn" href="#prices">ปรับราคาหลายรายการ</a>' : ''}<button class="btn primary" id="addp">+ เพิ่มสินค้า</button></span></div>
+    <div class="cat-chips" id="pcats"></div>
     <div class="row"><input type="search" id="pq2" placeholder="ค้นหาชื่อสินค้า" style="flex:1;min-width:220px" autocomplete="off">
       <select id="pf"><option value="">ทั้งหมด</option><option value="neg">สต๊อกติดลบ</option><option value="noprice">ยังไม่มีราคา</option><option value="service">ไม่มีสต๊อก (บริการ)</option></select></div>
+    <div class="cat-bulk hidden" id="pbulk"></div>
     <div class="scroll"><table id="ptab"></table></div>
   </section>`;
+  let shown = [];
   const draw = () => {
     const n = norm($('#pq2').value), f = $('#pf').value;
-    const list = liveProducts().filter((p) => (!n || norm(p.name).includes(n) || p.code.startsWith($('#pq2').value.trim()))
-      && (!f || (f === 'neg' ? !p.noStock && p.stock < 0 : f === 'noprice' ? !p.price : p.noStock))).sort((a, b) => a.name.localeCompare(b.name, 'th'));
-    $('#ptab').innerHTML = `<tr><th>รหัส</th><th>ชื่อ</th><th>หน่วย</th><th class="num">ราคาขาย</th><th class="num">คงเหลือ</th><th></th></tr>`
-      + (list.length ? list.slice(0, 300).map((p) => `<tr><td class="mono">${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.unit)}</td><td class="num">${p.price ? money(p.price) : '<span class="pill credit">ไม่มีราคา</span>'}</td><td class="num">${p.noStock ? '<span class="muted">ไม่มีสต๊อก</span>' : `<span style="${p.stock < 0 ? 'color:var(--red);font-weight:600' : ''}">${qtyFmt(p.stock)}</span>`}</td><td><button class="btn small" data-e="${esc(p.code)}">แก้ไข</button></td></tr>`).join('')
-        : '<tr><td colspan="6" class="empty">ไม่พบสินค้า</td></tr>');
+    const base = liveProducts().filter((p) => (!n || norm(p.name).includes(n) || p.code.startsWith($('#pq2').value.trim()))
+      && (!f || (f === 'neg' ? !p.noStock && p.stock < 0 : f === 'noprice' ? !p.price : p.noStock)));
+    $('#pcats').innerHTML = catChips(base, prodCat);
+    const list = base.filter((p) => inCat(p, prodCat)).sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    shown = list.slice(0, 300);
+    $('#ptab').innerHTML = `<tr><th style="width:36px"><input type="checkbox" id="pall" aria-label="เลือกทั้งหมดที่แสดง" style="width:20px;height:20px;accent-color:var(--green)" ${shown.length && shown.every((p) => picked.has(p.code)) ? 'checked' : ''}></th><th>รหัส</th><th>ชื่อ</th><th>หมวดหมู่</th><th>หน่วย</th><th class="num">ราคาขาย</th><th class="num">คงเหลือ</th><th></th></tr>`
+      + (shown.length ? shown.map((p) => `<tr${picked.has(p.code) ? ' class="sel"' : ''}><td><input type="checkbox" data-pick="${esc(p.code)}" ${picked.has(p.code) ? 'checked' : ''} aria-label="เลือก ${esc(p.name)}" style="width:20px;height:20px;accent-color:var(--green)"></td><td class="mono">${esc(p.code)}</td><td>${esc(p.name)}</td>
+        <td>${p.category ? `<span class="cat-tag">${esc(p.category)}</span>` : `<span class="muted" style="font-size:13px">ยังไม่มีหมวด${p.group ? ` · เดิม: ${esc(p.group)}` : ''}</span>`}</td><td>${esc(p.unit)}</td><td class="num">${p.price ? money(p.price) : '<span class="pill credit">ไม่มีราคา</span>'}</td><td class="num">${p.noStock ? '<span class="muted">ไม่มีสต๊อก</span>' : `<span style="${p.stock < 0 ? 'color:var(--red);font-weight:600' : ''}">${qtyFmt(p.stock)}</span>`}</td><td><button class="btn small" data-e="${esc(p.code)}">แก้ไข</button></td></tr>`).join('')
+        : '<tr><td colspan="8" class="empty">ไม่พบสินค้า</td></tr>');
+    const k = picked.size;
+    $('#pbulk').classList.toggle('hidden', !k);
+    $('#pbulk').innerHTML = k ? `<b>เลือก ${k} รายการ</b><span>ย้ายไปหมวด</span><select data-cat id="bcat">${catOptions('')}</select><button type="button" class="btn primary" id="bmove">ย้าย</button><button type="button" class="btn" id="bclear">ไม่เลือก</button>` : '';
+    if (k) hookNewCategory($('#pbulk'));
   };
   $('#pq2').addEventListener('input', draw); $('#pf').addEventListener('change', draw);
+  $('#pcats').addEventListener('click', (e) => { const b = e.target.closest('[data-cat-f]'); if (b) { prodCat = b.dataset.catF; draw(); } });
   $('#ptab').addEventListener('click', (e) => { const b = e.target.closest('[data-e]'); if (b) productForm(liveProducts().find((p) => p.code === b.dataset.e)); });
+  $('#ptab').addEventListener('change', (e) => {
+    if (e.target.id === 'pall') { shown.forEach((p) => (e.target.checked ? picked.add(p.code) : picked.delete(p.code))); draw(); return; }
+    const c = e.target.dataset.pick; if (!c) return; e.target.checked ? picked.add(c) : picked.delete(c); draw();
+  });
+  $('#pbulk').addEventListener('click', async (e) => {
+    if (e.target.id === 'bclear') { picked.clear(); draw(); return; }
+    if (e.target.id !== 'bmove') return;
+    const cat = $('#bcat').value === '__new' ? '' : $('#bcat').value;
+    e.target.disabled = true;
+    try { await backend.setCategory(shopId, [...picked], cat); toast(`ย้าย ${picked.size} รายการไป${cat ? 'หมวด ' + cat : ' "ยังไม่มีหมวด"'} แล้ว`); picked.clear(); setTimeout(draw, 300); }
+    catch (er) { toast(er.message); e.target.disabled = false; }
+  });
+  $('#mcat')?.addEventListener('click', () => manageCategories(viewProducts));
   $('#addp').addEventListener('click', () => productForm());
-  draw(); $('#pq2').focus();
+  draw(); if (!isPhone()) $('#pq2').focus();
 }
 
 // ---------------- one search box for customers, products and bills ----------------

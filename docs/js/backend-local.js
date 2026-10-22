@@ -54,6 +54,11 @@ export async function saveProduct(shopId, p) {
   if (i >= 0) data.products[i] = { ...data.products[i], ...p }; else data.products.push(p);
   await saveData(data);
 }
+export async function setCategory(shopId, codes, category) {
+  const set = new Set(codes);
+  for (const p of data.products) if (set.has(p.code)) p.category = category || '';
+  await saveData(data);
+}
 export async function setMinStock(shopId, codes, minStock) {
   const set = new Set(codes);
   for (const p of data.products) if (set.has(p.code)) { p.minStock = Number(minStock) || 0; p.minStockBy = USER.name; }

@@ -473,3 +473,17 @@ tr.mline.noprice { background: var(--orange-soft); }
 .ss-save { min-height: 60px; font-size: 18px; justify-content: center; }
 
 .ps-page { display: flex; flex-direction: column; gap: 12px; }
+
+/* product categories */
+.cat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cat-chips .chip { min-height: 40px; font-size: 14px; }
+.cat-chips.scroll-x { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
+.cat-chips.scroll-x::-webkit-scrollbar { display: none; }
+.cat-chips.scroll-x .chip { flex: none; }
+.cat-tag { display: inline-block; padding: 2px 10px; border-radius: 10px; background: var(--green-soft); color: var(--green); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.cat-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--green-soft); border-radius: 12px; padding: 8px 12px; position: sticky; top: 0; z-index: 5; }
+.cat-bulk select { min-width: 180px; }
+tr.sel td { background: var(--green-soft); }
+.cat-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow: auto; }
+.cat-row { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+.cat-name { flex: 1; min-width: 0; }

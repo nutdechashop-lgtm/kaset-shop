@@ -5,6 +5,14 @@ import { round2, allocatePayment, payBills, billBalance, daysBetween } from './i
 export const RATES = [2, 1.75, 1.5, 1.25, 1, 0.5, 0];
 export const GRACE_MONTHS = [1, 2, 3, 4, 5, 6];
 
+// Product categories a new shop starts with (each shop can add, rename, reorder or remove them).
+export const DEFAULT_CATEGORIES = ['สารกำจัดเชื้อรา', 'สารกำจัดเพลี้ย', 'สารกำจัดแมลง', 'สารกำจัดวัชพืช (นาข้าว)', 'สารกำจัดวัชพืช (พืชไร่)', 'ปุ๋ยกระสอบ', 'ปุ๋ยเกล็ด', 'ฮอร์โมน'];
+// The shop's category list in its order, plus any category a product uses that is not on the list yet.
+export function categoryList(settings, products = []) {
+  const list = Array.isArray(settings?.categories) ? settings.categories.filter(Boolean) : [...DEFAULT_CATEGORIES];
+  for (const p of products) if (p.category && !p.deleted && !list.includes(p.category)) list.push(p.category);
+  return list;
+}
 export const DEFAULT_SETTINGS = {
   name: '', address: '', phone: '', taxId: '',
   prefix: '01',        // shown in front of bill numbers, e.g. 01-BS6910170001
