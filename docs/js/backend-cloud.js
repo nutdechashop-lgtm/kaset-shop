@@ -29,7 +29,7 @@ function authMsg(e) {
   const c = e?.code || '';
   if (/invalid-credential|wrong-password|user-not-found|invalid-email/.test(c)) return 'รหัสหรือ PIN ไม่ถูกต้อง';
   if (/too-many-requests/.test(c)) return 'ใส่ผิดหลายครั้ง รอสักครู่แล้วลองใหม่';
-  if (/network/.test(c)) return 'ต่ออินเทอร์เน็ตไม่ได้';
+  if (/network/.test(c)) return 'ต่ออินเทอร์เน็ตไม่ได้ · การเข้าระบบต้องมีอินเทอร์เน็ต (เข้าแล้วใช้งานต่อตอนไม่มีเน็ตได้)';
   if (/email-already-in-use/.test(c)) return 'รหัสนี้มีคนใช้แล้ว (หรือเคยถูกลบไป) ให้ตั้งรหัสอื่น เช่น เติมตัวเลขต่อท้าย';
   if (/weak-password/.test(c)) return 'PIN ต้องมี 6 หลัก';
   if (/permission-denied/.test(c)) return 'ไม่มีสิทธิ์ทำรายการนี้';
@@ -44,6 +44,9 @@ function withTimeout(p, ms, what) {
   return Promise.race([p, timer]).finally(() => clearTimeout(t));
 }
 const wrap = async (fn) => { try { return await fn(); } catch (e) { throw new Error(authMsg(e)); } };
+// Without internet Firestore keeps a write on this computer and sends it later, but its promise only
+// settles when the server answers: don't make the person wait for that.
+const save = (p) => { if (online()) return wrap(() => p); p.catch((e) => console.warn('saved later failed', e)); return Promise.resolve(); };
 
 // ---------- sign in ----------
 let me = null;
@@ -179,7 +182,7 @@ export async function getClose(shopId, date) { const d = await wrap(() => fb.get
 
 export async function saveSettings(shopId, s) {
   const { id, ...rest } = s;
-  await wrap(() => fb.setDoc(shopDoc(shopId), rest, { merge: true }));
+  await save(fb.setDoc(shopDoc(shopId), rest, { merge: true }));
 }
 
 // Sale: bill number from a per-day counter, stock reduced with increments (safe with several devices).
@@ -188,36 +191,50 @@ export async function saveSettings(shopId, s) {
 // numbers and are written as a plain batch: with internet it is saved at once; without internet it is
 // kept on this computer (and the bill can be printed) and sent automatically when the internet is back.
 // Numbers never clash between computers. Backdated bills still need internet (they use the day counter).
-const RESV_N = 15;
-const resvKey = (shopId) => 'resv:' + shopId;
-const loadResv = (shopId) => { try { return JSON.parse(localStorage.getItem(resvKey(shopId)) || 'null'); } catch { return null; } };
-const saveResv = (shopId, r) => { try { localStorage.setItem(resvKey(shopId), JSON.stringify(r)); } catch { /* ignore */ } };
+// Every computer keeps at least OFFLINE_BILLS numbers in hand for today, plus a block for tomorrow
+// (so a shop whose internet is down in the morning can still sell). Numbers are taken from the
+// day counter one block at a time; a block is used up before the next, so there are no gaps
+// except the unused end of a computer's last block of the day.
+export const OFFLINE_BILLS = 30;
+const resvKey = (shopId) => 'resv2:' + shopId;
+const loadResv = (shopId) => { try { return JSON.parse(localStorage.getItem(resvKey(shopId)) || '{}') || {}; } catch { return {}; } };
+const saveResv = (shopId, r) => { try { localStorage.setItem(resvKey(shopId), JSON.stringify(r)); } catch { /* ignore */ } window.dispatchEvent(new Event('pendingchange')); };
 const online = () => navigator.onLine !== false;
-export async function reserveNumbers(shopId, settings) {
-  const head = docHead(settings.prefix, 'BS', todayIso());
-  const r = loadResv(shopId);
-  if (r && r.head === head && (r.to - r.next >= 3 || r.more)) return r;
-  if (!online()) return r && r.head === head ? r : null;
+const left = (blocks = []) => blocks.reduce((t, b) => t + Math.max(0, b.to - b.next + 1), 0);
+// How many bills this computer can still save today without internet.
+export function offlineLeft(shopId, settings) { return left(loadResv(shopId)[docHead(settings.prefix, 'BS', todayIso())]); }
+async function reserveBlock(shopId, head) {
   const localMax = maxRunning(head, (data?.bills || []).map((b) => b.no));
-  const res = await wrap(() => withTimeout(fb.runTransaction(db, async (tx) => {
+  return wrap(() => withTimeout(fb.runTransaction(db, async (tx) => {
     const cref = sub(shopId, 'counters', head);
     const cs = await tx.get(cref);
     const n = Math.max(cs.exists() ? cs.data().n : 0, localMax);
-    tx.set(cref, { n: n + RESV_N });
-    return { head, next: n + 1, to: n + RESV_N };
+    tx.set(cref, { n: n + OFFLINE_BILLS });
+    return { next: n + 1, to: n + OFFLINE_BILLS };
   }), 15000, 'จองเลขบิล'));
-  // keep unused numbers of the old block for today first
-  const keep = r && r.head === head && r.next <= r.to ? r : null;
-  const out = keep ? { head, next: keep.next, to: keep.to, more: res } : res;
-  saveResv(shopId, out);
-  return out;
+}
+let reserving = null;
+export function reserveNumbers(shopId, settings) {
+  if (!online()) return Promise.resolve();
+  if (reserving) return reserving;
+  reserving = (async () => {
+    const today = docHead(settings.prefix, 'BS', todayIso()), tomorrow = docHead(settings.prefix, 'BS', addDays(todayIso(), 1));
+    const r = loadResv(shopId);
+    for (const k of Object.keys(r)) if (k !== today && k !== tomorrow) delete r[k]; // old days
+    for (const head of [today, tomorrow]) {
+      r[head] = (r[head] || []).filter((b) => b.next <= b.to);
+      if (left(r[head]) < OFFLINE_BILLS) { r[head].push(await reserveBlock(shopId, head)); saveResv(shopId, r); }
+    }
+    saveResv(shopId, r);
+  })().finally(() => { reserving = null; });
+  return reserving;
 }
 function takeNumber(shopId, head) {
-  let r = loadResv(shopId);
-  if (r && r.head === head && r.next > r.to && r.more) { r = r.more; }
-  if (!r || r.head !== head || r.next > r.to) return null;
-  const no = head + String(r.next).padStart(4, '0');
-  r.next++; saveResv(shopId, r.next > r.to && r.more ? r.more : r);
+  const r = loadResv(shopId);
+  const b = (r[head] || []).find((x) => x.next <= x.to);
+  if (!b) return null;
+  const no = head + String(b.next).padStart(4, '0');
+  b.next++; r[head] = r[head].filter((x) => x.next <= x.to); saveResv(shopId, r);
   return no;
 }
 // Sales saved on this computer but not yet confirmed by the server.
@@ -237,7 +254,7 @@ export async function commitSale(shopId, settings, input) {
   if (date === todayIso()) {
     let no = takeNumber(shopId, head);
     if (!no && online()) { await reserveNumbers(shopId, settings); no = takeNumber(shopId, head); }
-    if (!no) throw new Error('ไม่มีอินเทอร์เน็ต และเลขบิลสำรองของเครื่องนี้หมดแล้ว ต่ออินเทอร์เน็ตก่อนแล้วลองใหม่');
+    if (!no) throw new Error(`ไม่มีอินเทอร์เน็ต และเครื่องนี้ลงบิลตอนไม่มีเน็ตครบ ${OFFLINE_BILLS} บิลแล้ว · ต่ออินเทอร์เน็ตสักครู่ (ระบบจะส่งบิลที่ค้างและเตรียมเลขบิลใหม่ให้เอง) แล้วลองใหม่`);
     const scratch = { customers: data.customers, products: data.products.map((p) => ({ ...p })), bills: [], receipts: [] };
     const bill = createSale(scratch, settings, { ...input, date, by: me.name }, { no });
     bill.byUid = me.uid;
@@ -308,20 +325,20 @@ export async function commitPayment(shopId, settings, input) {
   }));
 }
 
-export async function saveCustomer(shopId, c) { await wrap(() => fb.setDoc(sub(shopId, 'customers', c.code), c, { merge: true })); }
+export async function saveCustomer(shopId, c) { await save(fb.setDoc(sub(shopId, 'customers', c.code), c, { merge: true })); }
 // Low-stock alert level for many products at once (0 = off).
 export async function setCategory(shopId, codes, category) {
   for (let i = 0; i < codes.length; i += 400) {
     const b = fb.writeBatch(db);
     codes.slice(i, i + 400).forEach((code) => b.set(sub(shopId, 'products', code), { category: category || '', updatedBy: me.name }, { merge: true }));
-    await wrap(() => b.commit());
+    await save(b.commit());
   }
 }
 export async function setMinStock(shopId, codes, minStock) {
   for (let i = 0; i < codes.length; i += 400) {
     const b = fb.writeBatch(db);
     codes.slice(i, i + 400).forEach((code) => b.set(sub(shopId, 'products', code), { minStock: Number(minStock) || 0, minStockBy: me.name }, { merge: true }));
-    await wrap(() => b.commit());
+    await save(b.commit());
   }
 }
 // ---------- reports: everything dated within a range (any shop the person can open) ----------
@@ -349,7 +366,7 @@ export async function setPrices(shopId, changes) {
   needOnline('ปรับราคา');
   await commitInBatches(changes.map(({ code, price }) => (b) => b.set(sub(shopId, 'products', code), { price, priceFromHistory: false, updatedBy: me.name }, { merge: true })));
 }
-export async function saveProduct(shopId, p) { await wrap(() => fb.setDoc(sub(shopId, 'products', p.code), p, { merge: true })); }
+export async function saveProduct(shopId, p) { await save(fb.setDoc(sub(shopId, 'products', p.code), p, { merge: true })); }
 
 // Older bills / receipts are not kept live; fetch them when searched.
 export async function findBills(shopId, { no, customerCode }) {
@@ -522,7 +539,7 @@ export async function commitBillChange(shopId, billNo, kind, changes, meta) {
 export async function createRequest(shopId, req) {
   const ref = fb.doc(sub(shopId, 'requests'));
   const r = { status: 'pending', createdAt: new Date().toISOString(), byUid: me.uid, ...req };
-  await wrap(() => fb.setDoc(ref, r));
+  await save(fb.setDoc(ref, r));
   return { id: ref.id, ...r };
 }
 export async function resolveRequest(shopId, id, approve, meta) {

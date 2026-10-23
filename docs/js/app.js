@@ -112,7 +112,7 @@ function drawHeader() {
   if (inShop && isPhone()) $('#shopName').insertAdjacentHTML('afterend', `<a id="hdrSearch" class="bell" href="#search" aria-label="ค้นหา">${icon('search', 22)}</a>`);
   if (inShop) {
     const pend = backend.pendingCount?.(shopId) || 0, off = navigator.onLine === false;
-    if (off || pend) $('#shopName').insertAdjacentHTML('afterend', `<span id="netPill" class="pill" style="background:${off ? 'var(--red)' : 'var(--orange)'};color:#fff;margin-left:6px" title="บิลที่ขายตอนไม่มีเน็ตเก็บไว้ในเครื่องนี้ จะส่งขึ้นระบบเองเมื่อเน็ตกลับ">${off ? 'ไม่มีอินเทอร์เน็ต · ขายได้ตามปกติ' : ''}${off && pend ? ' · ' : ''}${pend ? `รอส่งขึ้นระบบ ${pend} บิล` : ''}</span>`);
+    if (off || pend) $('#shopName').insertAdjacentHTML('afterend', `<span id="netPill" class="pill" style="background:${off ? 'var(--red)' : 'var(--orange)'};color:#fff;margin-left:6px" title="บิลที่ขายตอนไม่มีเน็ตเก็บไว้ในเครื่องนี้ จะส่งขึ้นระบบเองเมื่อเน็ตกลับ · รับชำระหนี้ แก้บิล ปรับสต๊อก และโอนสต๊อก ต้องรอเน็ต">${off ? `ไม่มีอินเทอร์เน็ต · ลงบิลได้อีก ${backend.offlineLeft?.(shopId, settings) ?? 0} บิล` : ''}${off && pend ? ' · ' : ''}${pend ? `รอส่งขึ้นระบบ ${pend} บิล` : ''}</span>`);
   }
   if (typeof drawImportBadge === 'function') setTimeout(drawImportBadge, 0);
   if (alertsOn()) $('#shopName').insertAdjacentHTML('afterend', `<a id="bell" class="bell" href="#home" aria-label="แจ้งเตือน ${nAlert} รายการ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6v3.6L4.3 15.4A1 1 0 0 0 5.2 17h13.6a1 1 0 0 0 .9-1.6L18 12.6V9a6 6 0 0 0-6-6zm0 19a3 3 0 0 0 3-3H9a3 3 0 0 0 3 3z" fill="currentColor"/></svg>${nAlert ? `<span class="badge">${nAlert}</span>` : ''}</a>`);
@@ -301,6 +301,7 @@ async function enterShop(id) {
   if (!settings.name && canEditSettings() && !location.hash) location.hash = 'settings';
   render();
   startBeat(); beat();
+  backend.reserveNumbers?.(shopId, settings).catch(() => {});
   checkAlerts().catch(() => {});
   backend.flushPending?.(shopId).catch(() => {});
 }
