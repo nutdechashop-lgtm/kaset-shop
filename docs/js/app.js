@@ -67,9 +67,31 @@ const ICON = {
   check: '<path d="M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9"/>',
   swap: '<path d="M17 3l4 4-4 4M3 7h18M7 21l-4-4 4-4M21 17H3"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  box: '<path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4"/>',
+  chart: '<path d="M3 3v18h18M7 15l4-4 3 3 6-6"/>',
+  bank: '<path d="M3 10h18M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 21h18M12 3l9 5H3Z"/>',
+  key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l3 3M15 8l2 2"/>',
+  upload: '<path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
+  auto: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
   phone: '<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2Z"/>',
 };
+const NAV_ICON = { home: 'home', sale: 'sale', debt: 'debt', bills: 'bills', customers: 'users', products: 'box', stock: 'stock', close: 'close', report: 'chart', approve: 'check', bank: 'bank', users: 'key', backup: 'upload', settings: 'gear' };
+// Day / night: '' follows the device, or 'light' / 'dark' chosen here (remembered on this device).
+const themeNow = () => { try { return localStorage.getItem('theme') || ''; } catch { return ''; } };
+function setTheme(t) {
+  try { t ? localStorage.setItem('theme', t) : localStorage.removeItem('theme'); } catch { /* ignore */ }
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  paintThemeColor(); $$('.theme-sw').forEach((el) => { el.outerHTML = themeSwitch(el.id); }); hookTheme();
+}
+function paintThemeColor() { const m = document.querySelector('meta[name=theme-color]'); if (m) m.content = getComputedStyle(document.body).getPropertyValue('--bg').trim() || '#F5F4F0'; }
+const themeSwitch = (id = '') => `<div class="theme-sw" role="group" aria-label="โหมดสี"${id ? ` id="${id}"` : ''}>${[['light', 'sun', 'กลางวัน'], ['dark', 'moon', 'กลางคืน'], ['', 'auto', 'ตามเครื่อง']].map(([v, k, t]) => `<button type="button" data-theme-set="${v}" aria-pressed="${themeNow() === v}" title="${t}" aria-label="โหมด${t}">${icon(k, 17)}</button>`).join('')}</div>`;
+function hookTheme() { $$('[data-theme-set]').forEach((b) => { b.onclick = () => setTheme(b.dataset.themeSet); }); }
+window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', () => setTimeout(paintThemeColor, 0));
 const icon = (k, size = 24) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[k] || ''}</svg>`;
 // Phone: a tab bar at the bottom with the 4 most used pages; everything else is under "เมนู".
 function phoneTabs() { return isManager() ? [['home', 'หน้าแรก'], ['sale', 'ขาย'], ['debt', 'ลูกหนี้'], ['stock', 'สต๊อก']] : [['sale', 'ขาย'], ['debt', 'ลูกหนี้'], ['stock', 'สต๊อก'], ['close', 'ปิดร้าน']]; }
@@ -89,11 +111,13 @@ function openMenuSheet() {
   const items = [['search', 'ค้นหา'], ...NAV.filter(([k, , mgr]) => canSee(mgr) && !tabs.has(k))];
   const f = openDialog(`<div class="sheet-head"><div><b>${esc(user.name)}</b> <span class="muted">· ${ROLE[user.role] || ''}</span></div><div class="muted" style="font-size:13px">${esc(settings.name || settings.label || '')}</div></div>
     ${user.role === 'admin' ? `<label class="field">ดูโปรแกรมในมุมมองของ<select id="sheetViewAs">${VIEW_AS.map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
+    <div class="row" style="justify-content:space-between"><span>โหมดสี</span>${themeSwitch()}</div>
     <div class="sheet-list">${items.map(([k, t]) => `<a href="#${k}" data-go>${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}<span class="chev">${icon('chev', 20)}</span></a>`).join('')}</div>
     <div class="row">${user.role === 'admin' || shops.length > 1 ? '<button type="button" class="btn" id="sheetShop">เปลี่ยนร้าน</button>' : ''}${backend.mode === 'cloud' ? '<button type="button" class="btn" id="sheetOut">ออกจากระบบ</button>' : ''}<button class="btn" value="cancel">ปิด</button></div>`);
   $$('[data-go]', f).forEach((a) => a.addEventListener('click', () => dlg.close()));
   $('#sheetViewAs', f)?.addEventListener('change', (e) => { viewAs = e.target.value; lsSet('viewAs', viewAs); dlg.close(); render(); });
   $('#sheetShop', f)?.addEventListener('click', () => { dlg.close(); leaveShop(); viewShopPicker(); });
+  hookTheme();
   $('#sheetOut', f)?.addEventListener('click', async () => { if (!confirm('ออกจากระบบ?')) return; dlg.close(); leaveShop(); await backend.signOut(); user = null; start(); });
   dlg.classList.add('sheet'); dlg.addEventListener('close', () => dlg.classList.remove('sheet'), { once: true });
 }
@@ -105,7 +129,8 @@ const defaultPage = () => (isManager() ? 'home' : isPhone() ? 'stock' : 'sale');
 function drawHeader() {
   const inShop = !!shop;
   const pending = inShop ? pendingRequests().length : 0;
-  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => canSee(mgr)).map(([k, t]) => `<a href="#${k}">${t}${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
+  document.body.classList.toggle('in-shop', inShop);
+  $('#nav').innerHTML = inShop ? NAV.filter(([, , mgr]) => canSee(mgr)).map(([k, t]) => `<a href="#${k}">${icon(NAV_ICON[k] || 'chev', 19)}<span>${t}</span>${k === 'approve' && pending ? ` <span class="badge">${pending}</span>` : ''}</a>`).join('') : '';
   $('#shopName').textContent = inShop ? (settings.name || settings.label || APP_NAME) : APP_NAME;
   const nAlert = alertsOn() ? currentAlerts().count : 0;
   $('#bell')?.remove(); $('#netPill')?.remove(); $('#hdrSearch')?.remove();
@@ -120,7 +145,11 @@ function drawHeader() {
     ${inShop && user.role === 'admin' ? `<label class="row" style="gap:6px">มุมมอง <select id="viewAs" class="hdr-select" aria-label="ดูโปรแกรมในมุมมองของ">${VIEW_AS.map(([v, t]) => `<option value="${v}" ${v === viewAs ? 'selected' : ''}>${t}</option>`).join('')}</select></label>` : ''}
     ${inShop && shops.length > 1 ? `<label class="row" style="gap:6px">ร้าน <select id="jumpShop" class="hdr-select" aria-label="สลับไปร้านอื่น">${shops.map((s) => `<option value="${esc(s.id)}" ${s.id === shopId ? 'selected' : ''}>${esc(s.label || s.name || s.id)}</option>`).join('')}</select></label>` : ''}
     ${inShop && (user.role === 'admin' || shops.length > 1) ? `<button class="btn small hdr" id="switchShop">${user.role === 'admin' ? 'ภาพรวมทุกร้าน' : 'เปลี่ยนร้าน'}</button>` : ''}
-    ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : '';
+    <div class="theme-row"><span>โหมดสี</span>${themeSwitch()}</div>
+    ${backend.mode === 'cloud' ? '<button class="btn small hdr" id="logout">ออกจากระบบ</button>' : '<span class="pill">โหมดทดสอบในเครื่อง</span>'}` : `<div class="theme-row">${themeSwitch()}</div>`;
+  $('#themePhone')?.remove();
+  if (inShop) $('.topbar .brand').insertAdjacentHTML('beforeend', themeSwitch('themePhone'));
+  hookTheme(); paintThemeColor();
   $('#switchShop')?.addEventListener('click', () => { leaveShop(); location.hash = ''; viewShopPicker(); });
   // Jump to the same page in another shop.
   $('#jumpShop')?.addEventListener('change', (e) => { const id = e.target.value; leaveShop(); enterShop(id); });
@@ -1068,39 +1097,61 @@ function rateDialog(b, done) {
 }
 
 // ---------------- home (owner) ----------------
+// Minimal digital clock on the computer home page.
+let clockTimer = null;
+function tickClock() {
+  const el = $('#clock'); if (!el) { clearInterval(clockTimer); clockTimer = null; return; }
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  el.innerHTML = `${p(d.getHours())}<i>:</i>${p(d.getMinutes())}<small class="muted">น.</small>`;
+  el.setAttribute('aria-label', `เวลา ${p(d.getHours())}:${p(d.getMinutes())} น.`);
+}
 function viewHome() {
   if (isPhone()) return viewHomePhone();
   const today = todayIso();
   const s = shopSnapshot(data, today);
-  const tile = (k, v, href, warn) => `<a class="stat tile${warn ? ' warn' : ''}" href="${href}"><div class="k">${k}</div><div class="v">${v}</div></a>`;
-  view.innerHTML = `${alertsCard()}
-  <section class="card">
-    <h2>วันนี้ ${thDate(today)}</h2>
-    <div class="stats">
-      ${tile('ขายเงินสด', money(s.today.cash), '#bills')}${tile('ขายเงินเชื่อ', money(s.today.credit), '#bills')}
-      ${tile('รับชำระหนี้', money(s.today.paid), '#paid')}${tile('เงินเข้ารวม', money(s.today.moneyIn), '#paid')}
-    </div>
-  </section>
-  ${isOwnerLevel() ? `<section class="card">
-    <h2>ลูกหนี้</h2>
-    <div class="stats">
-      ${tile('ยอดค้างรวม (ต้น+ดอก)', money(s.debt), '#debt')}${tile('ลูกค้าที่ค้าง', s.debtors + ' คน', '#debt')}
-      ${tile('ค้างเกิน 6 เดือน', s.overdue + ' บิล', '#overdue', s.overdue > 0)}${tile('ดอกเบี้ยถึงวันนี้', money(s.interest), '#debt')}
-    </div>
-  </section>` : ''}
-  <section class="card">
-    <h2>ต้องจัดการ</h2>
-    <div class="stats">
-      ${isOwnerLevel() ? tile('รออนุมัติ', pendingRequests().length + ' รายการ', '#approve', pendingRequests().length > 0) : ''}
-      ${tile('สินค้าใกล้หมด', s.lowStock + ' รายการ', '#stock/low', s.lowStock > 0)}
-      ${tile('สต๊อกติดลบ', s.negativeStock + ' รายการ', '#stock', s.negativeStock > 0)}
-      ${tile('สินค้ายังไม่มีราคา', s.noPrice + ' รายการ', '#products', s.noPrice > 0)}
-      ${tile('สำรองล่าสุด', settings.lastBackupAt ? new Date(settings.lastBackupAt).toLocaleDateString('th-TH') : 'ยังไม่เคย', '#backup', !settings.lastBackupAt)}
-    </div>
-  </section>
-  <div class="big-actions">
-    <a class="btn primary" href="#sale">ขาย</a><a class="btn" href="#debt">รับชำระ</a><a class="btn" href="#stock">สต๊อก</a><a class="btn" href="#bank">ส่งธนาคาร</a>
-  </div>`;
+  const dayName = new Date().toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const [whole, dec] = money(s.today.moneyIn).split('.');
+  // last 7 days of sales (cash + credit)
+  const days = Array.from({ length: 7 }, (_, k) => addDays(today, k - 6)).map((d) => { const x = daySummary(data, d); return { d, v: round2(x.cash + x.credit) }; });
+  const max = Math.max(1, ...days.map((x) => x.v));
+  const wd = (d) => new Date(d + 'T00:00:00').toLocaleDateString('th-TH', { weekday: 'short' });
+  const nPend = isOwnerLevel() ? pendingRequests().length : 0, nStale = stalePayers(data, today).length;
+  const todo = [[nPend, 'คำขอรออนุมัติ', '#approve', 'var(--green)'], [s.lowStock, 'สินค้าใกล้หมด', '#stock/low', 'var(--orange)'], [s.negativeStock, 'สต๊อกติดลบ', '#stock', 'var(--orange)'],
+    [nStale, 'ลูกหนี้ไม่ชำระเกิน 6 เดือน', '#stale', 'var(--red)'], [s.noPrice, 'สินค้ายังไม่มีราคา', '#products', 'var(--orange)']].filter(([n]) => n > 0);
+  const backupOld = !settings.lastBackupAt || daysBetween(settings.lastBackupAt.slice(0, 10), today) > 7;
+  const recent = [...data.bills.map((b) => ({ ...b, k: 'b' })), ...data.receipts.map((r) => ({ ...r, k: 'r' }))]
+    .filter((x) => x.source !== 'programkaset').sort((a, b) => ((b.createdAt || b.date) > (a.createdAt || a.date) ? 1 : -1)).slice(0, 8);
+  const tm = (x) => (x.createdAt ? new Date(x.createdAt).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) : thDate(x.date));
+  const tag = (x) => (x.k === 'r' ? (x.status === 'void' ? '<span class="tag x">ยกเลิก</span>' : '<span class="tag rp">รับชำระ</span>') : x.status === 'cancelled' ? '<span class="tag x">ยกเลิก</span>' : x.type === 'credit' ? '<span class="tag cr">เงินเชื่อ</span>' : '<span class="tag">เงินสด</span>');
+  view.innerHTML = `
+  <div class="home-head"><div><small>${esc(dayName)}</small><div class="clock" id="clock"></div></div>
+    <a class="home-search-d" href="#search">${icon('search', 18)}<span>ค้นหาลูกค้า สินค้า เลขบิล</span></a></div>
+  <section class="card"><div class="hero">
+    <div><small>เงินเข้าวันนี้</small><div class="big">฿${whole}<span>.${dec}</span></div></div>
+    <div><small>ขายเงินสด</small><div class="mid">${money(s.today.cash)}</div><small>${daySummary(data, today).bills} บิลวันนี้</small></div>
+    <div><small>รับชำระหนี้</small><div class="mid">${money(s.today.paid)}</div><small>${daySummary(data, today).receipts} ใบเสร็จ</small></div>
+    <div><small>ขายเงินเชื่อ</small><div class="mid cr">${money(s.today.credit)}</div></div>
+  </div></section>
+  <div class="home-cols">
+    <section class="card wide"><div class="row" style="justify-content:space-between;align-items:baseline"><h2>ยอดขาย 7 วัน</h2><span class="muted" style="font-size:13px">รวม ${money(round2(days.reduce((t, x) => t + x.v, 0)))}</span></div>
+      <div class="chart7">${days.map((x) => `<div title="${thDate(x.d)} · ${money(x.v)}"><span class="b" style="height:${Math.round((x.v / max) * 140)}px"></span><small>${wd(x.d)}</small></div>`).join('')}</div></section>
+    <section class="card"><h2>ต้องดูวันนี้</h2><div>
+      ${todo.map(([n, t, h, c]) => `<a class="todo-d" href="${h}"><i style="background:${c}"></i><span>${t}</span><b>${n}</b>${icon('chev', 16)}</a>`).join('')}
+      ${backupOld ? `<a class="todo-d" href="#backup"><i style="background:var(--muted)"></i><span>สำรองข้อมูล${settings.lastBackupAt ? ' ล่าสุด ' + new Date(settings.lastBackupAt).toLocaleDateString('th-TH') : ' (ยังไม่เคย)'}</span>${icon('chev', 16)}</a>` : ''}
+      ${!todo.length && !backupOld ? '<div class="muted" style="padding:12px 0">ไม่มีเรื่องที่ต้องดู</div>' : ''}</div></section>
+  </div>
+  ${isOwnerLevel() ? `<section class="card"><div class="row" style="justify-content:space-between;align-items:baseline"><h2>ลูกหนี้</h2><a href="#debt" style="font-size:14px;text-decoration:none">ดูทั้งหมด ›</a></div><div class="hero">
+    <div><small>ยอดค้างรวม (ต้น+ดอก)</small><div class="mid">${money(s.debt)}</div></div>
+    <div><small>ลูกค้าที่ค้าง</small><div class="mid">${s.debtors} คน</div></div>
+    <div><small>ดอกเบี้ยถึงวันนี้</small><div class="mid">${money(s.interest)}</div></div>
+    <div><small>ค้างเกิน 6 เดือน</small><div class="mid${s.overdue ? ' cr' : ''}"><a href="#overdue" style="color:inherit;text-decoration:none">${s.overdue} บิล</a></div></div>
+  </div></section>` : ''}
+  <section class="card"><div class="row" style="justify-content:space-between;align-items:baseline"><h2>รายการล่าสุด</h2><a href="#bills" style="font-size:14px;text-decoration:none">ดูทั้งหมด ›</a></div>
+    <div class="scroll"><table>${recent.length ? recent.map((x) => `<tr class="clickable" data-no="${esc(x.no)}" data-k="${x.k}"><td class="mono muted" style="font-size:13px">${esc(x.no)}</td><td>${esc(custLabel(x.customerCode))}</td><td>${tag(x)}</td><td class="num">${money(x.total)}</td><td class="num muted" style="font-size:13px">${tm(x)}</td></tr>`).join('') : '<tr><td class="empty">ยังไม่มีรายการ</td></tr>'}</table></div></section>`;
+  $$('#view [data-no]').forEach((r) => r.addEventListener('click', () => {
+    if (r.dataset.k === 'b') showBill(data.bills.find((b) => b.no === r.dataset.no)); else { const rc = data.receipts.find((x) => x.no === r.dataset.no); if (rc) location.hash = 'debt/' + encodeURIComponent(rc.customerCode); }
+  }));
+  tickClock(); if (!clockTimer) clockTimer = setInterval(tickClock, 15000);
 }
 
 // ---------------- owner alerts on the phone: requests + low stock ----------------

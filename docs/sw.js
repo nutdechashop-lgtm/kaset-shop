@@ -3,7 +3,7 @@
 //   internet, or the server takes longer than a few seconds, use the copy saved on this device.
 // - Everything the program needs is saved when it is installed, so it opens offline even on pages not yet visited.
 // - Fonts (Google Fonts) are kept too, so screens and printed bills look right offline.
-const CACHE = 'kaset-shop-v12';
+const CACHE = 'kaset-shop-v13';
 const FONTS = 'kaset-fonts-v1';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
