@@ -190,4 +190,14 @@ assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', s
   assert.deepEqual(categoryList({ categories: ['ข', 'ก'] }, [{ category: 'ค' }, { category: 'ก' }, { category: 'ง', deleted: true }]), ['ข', 'ก', 'ค']);
   assert.deepEqual(categoryList({ categories: [] }, []), []);
 }
+{ // switch a bill between cash and credit
+  const prods = [{ code: 'p', name: 'P', unit: 'u', price: 100, stock: 10 }];
+  const cash = { no: 'B1', date: '2026-10-01', type: 'cash', customerCode: '', rate: 0, graceDays: 0, subtotal: 200, discount: 0, total: 200, status: 'paid', principalLeft: 0, paidDate: '2026-10-01', lines: [{ code: 'p', name: 'P', unit: 'u', qty: 2, price: 100, amount: 200 }] };
+  assert.throws(() => editBill(prods, cash, { lines: cash.lines, type: 'credit' }), /ลูกค้า/);
+  const { bill: cr, stock } = editBill(prods, cash, { lines: cash.lines, type: 'credit', customerCode: 'c1', rate: 2, graceMonths: 0 });
+  assert.equal(cr.type, 'credit'); assert.equal(cr.status, 'open'); assert.equal(cr.principalLeft, 200); assert.equal(cr.rate, 2); assert.equal(cr.paidDate, null); assert.equal(stock.size, 0);
+  assert.equal(cr.editHistory[0].before.type, 'cash');
+  const { bill: back } = editBill(prods, cr, { lines: cr.lines, type: 'cash' });
+  assert.equal(back.type, 'cash'); assert.equal(back.status, 'paid'); assert.equal(back.principalLeft, 0); assert.equal(back.rate, 0); assert.equal(back.customerCode, 'c1');
+}
 console.log('ALL SHOP CHECKS PASSED');

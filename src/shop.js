@@ -234,9 +234,10 @@ export function billLockReason(b) {
   return null;
 }
 
-const snapshot = (b) => ({ lines: b.lines, subtotal: b.subtotal, discount: b.discount, total: b.total, rate: b.rate, graceDays: b.graceDays });
+const snapshot = (b) => ({ lines: b.lines, subtotal: b.subtotal, discount: b.discount, total: b.total, rate: b.rate, graceDays: b.graceDays, type: b.type, customerCode: b.customerCode || '' });
 
-// changes: { lines: [{code, qty, price, name?, unit?}], discount, rate, graceMonths }
+// changes: { lines: [{code, qty, price, name?, unit?}], discount, rate, graceMonths, type?, customerCode? }
+// type switches the bill between cash and credit (credit needs a customer).
 // Returns the new bill and the stock change per product (+ = goes back into stock).
 export function editBill(products, bill, changes, { by = '', reason = '', at = new Date().toISOString() } = {}) {
   const lock = billLockReason(bill); if (lock) throw new Error(lock);
@@ -255,13 +256,17 @@ export function editBill(products, bill, changes, { by = '', reason = '', at = n
   const discount = round2(Number(changes.discount) || 0);
   if (discount < 0 || discount > subtotal) throw new Error('ส่วนลดไม่ถูกต้อง');
   const total = round2(subtotal - discount);
-  const credit = bill.type === 'credit';
+  const type = changes.type === 'credit' || changes.type === 'cash' ? changes.type : bill.type;
+  const customerCode = changes.customerCode !== undefined ? (changes.customerCode || '') : (bill.customerCode || '');
+  const credit = type === 'credit';
+  if (credit && !customerCode) throw new Error('บิลเงินเชื่อต้องเลือกลูกค้า');
   const next = {
-    ...bill, lines, subtotal, discount, total,
-    rate: credit ? Number(changes.rate ?? bill.rate) : 0,
+    ...bill, type, customerCode, lines, subtotal, discount, total,
+    rate: credit ? Number(changes.rate ?? (bill.rate || 2)) : 0,
     graceDays: credit ? (changes.graceMonths != null ? Number(changes.graceMonths) * 30 : bill.graceDays || 0) : 0,
     principalLeft: credit ? total : 0,
-    status: credit ? (total > 0 ? 'open' : 'paid') : bill.status,
+    status: credit ? (total > 0 ? 'open' : 'paid') : 'paid',
+    paidDate: credit ? null : (bill.type === 'cash' ? bill.paidDate || bill.date : bill.date),
     edits: (bill.edits || 0) + 1,
     editHistory: [...(bill.editHistory || []), { at, by, reason, before: snapshot(bill) }],
   };
