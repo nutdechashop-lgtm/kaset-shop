@@ -687,6 +687,11 @@ export async function useCostPin(shopId, pin) {
 }
 
 // ---------- overview of every shop (super-admin) ----------
+// Everything needed for the printed summaries of one shop (customers, products, open bills).
+export async function shopSummaryData(shopId) {
+  const [c, p, b] = await wrap(() => withTimeout(Promise.all([fb.getDocs(sub(shopId, 'customers')), fb.getDocs(sub(shopId, 'products')), fb.getDocs(fb.query(sub(shopId, 'bills'), fb.where('status', '==', 'open')))]), 120000, 'อ่านข้อมูลสรุป'));
+  return { customers: c.docs.map((d) => d.data()), products: p.docs.map((d) => d.data()), bills: b.docs.map((d) => d.data()), receipts: [] };
+}
 export async function shopOverview(shopId) {
   const today = todayIso();
   const [bt, rt, open, rq] = await Promise.all([

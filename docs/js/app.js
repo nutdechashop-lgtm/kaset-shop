@@ -1,7 +1,7 @@
 // Main program: sign in, pick shop, sales, debtors & payments, bill search, customers, products,
 // staff codes, import from the old program, shop settings.
 // Data goes through a backend: Firebase (default) or this browser only (?local=1, for testing).
-import { categoryList, overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers, closeSummary, salesReport } from './shop.js';
+import { debtSummary, stockSummary, categoryList, overdueBills, bankList, shopSnapshot, bahtText, RATES, GRACE_MONTHS, todayIso, customerDebts, nextCustomerCode, nextProductCode, zones, daySummary, billLockReason, diffLines, receiptLockReason, isLow, lowStock, MIN_PRESETS, stalePayers, closeSummary, salesReport } from './shop.js';
 import { round2, allocatePayment, billBalance, daysBetween, interestStart, addDays } from './interest.js';
 import { getBackupDir, setBackupDir } from './store.js';
 
@@ -249,11 +249,12 @@ async function viewShopPicker() {
   }
   // Super-admin control panel: every shop at a glance with one-tap shortcuts, plus all login codes in one place.
   view.innerHTML = `<div class="admin-panel">
-    <div class="tabs" role="tablist"><a href="#" role="tab" data-ptab="shops" aria-selected="${pickerTab === 'shops'}">ร้านทั้งหมด (${shops.length})</a><a href="#" role="tab" data-ptab="users" aria-selected="${pickerTab === 'users'}">รหัสพนักงานทุกร้าน</a></div>
+    <div class="tabs" role="tablist"><a href="#" role="tab" data-ptab="shops" aria-selected="${pickerTab === 'shops'}">ร้านทั้งหมด (${shops.length})</a><a href="#" role="tab" data-ptab="users" aria-selected="${pickerTab === 'users'}">รหัสพนักงานทุกร้าน</a><a href="#" role="tab" data-ptab="print" aria-selected="${pickerTab === 'print'}">พิมพ์สรุป</a></div>
     <div id="pbody"></div></div>`;
   $$('[data-ptab]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); pickerTab = a.dataset.ptab; viewShopPicker(); }));
   const body = $('#pbody');
   if (pickerTab === 'users') return viewUsers({ box: body });
+  if (pickerTab === 'print') return viewAdminSummary(body);
   const go = (id, page) => { location.hash = page || ''; enterShop(id); };
   body.innerHTML = `<section class="card" style="margin:0"><h2>รวมทุกร้าน · วันนี้ ${thDate(todayIso())}</h2><div class="stats" id="ovTotal"><div class="stat"><div class="k">กำลังรวมยอด…</div><div class="v"><span class="spinner"></span></div></div></div></section>
     <div class="shop-grid">${shops.map((s) => `<section class="card shop-card" data-card="${esc(s.id)}">
@@ -320,6 +321,126 @@ async function viewShopPicker() {
 let beatTimer = null;
 function beat() { if (user && document.visibilityState === 'visible') backend.heartbeat?.(shopId); }
 function startBeat() { if (beatTimer) return; beat(); beatTimer = setInterval(beat, 3 * 60 * 1000); document.addEventListener('visibilitychange', beat); }
+// ---------------- super-admin: printed summaries of debtors and products ----------------
+const sumState = { shop: '', date: '', dShow: 'person', dFilter: 'all', dSort: 'total', dInt: true, dPhone: true, pCats: [], pFilter: 'all', cols: { stock: true, price: true, cost: true, value: true, count: false } };
+const sumCache = new Map(); // shopId → data (kept while the panel is open)
+async function viewAdminSummary(box) {
+  if (!sumState.date) sumState.date = todayIso();
+  box.innerHTML = '<section class="card"><div class="row"><span class="spinner"></span> กำลังดึงข้อมูลทุกร้าน…</div></section>';
+  try { for (const sh of shops) if (!sumCache.has(sh.id)) sumCache.set(sh.id, await backend.shopSummaryData(sh.id)); }
+  catch (e) { box.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const label = (sh) => sh.label || sh.name || sh.id;
+  const picked = () => (sumState.shop ? shops.filter((x) => x.id === sumState.shop) : shops);
+  const allCats = () => [...new Set(picked().flatMap((sh) => { const ps = sumCache.get(sh.id).products.filter((x) => !x.deleted); return categoryList(sh, ps).filter((c) => ps.some((x) => x.category === c)); }))];
+  const chips = (key, opts) => opts.map(([v, t]) => `<button type="button" class="chip" data-k="${key}" data-v="${esc(v)}" aria-pressed="${sumState[key] === v}">${esc(t)}</button>`).join('');
+  const debtCalc = () => picked().map((sh) => ({ sh, s: debtSummary(sumCache.get(sh.id), sumState.date, { filter: sumState.dFilter, sort: sumState.dSort, withInterest: sumState.dInt }) }));
+  const stockCalc = () => picked().map((sh) => ({ sh, s: stockSummary(sumCache.get(sh.id).products, { cats: sumState.pCats, filter: sumState.pFilter, categories: categoryList(sh, sumCache.get(sh.id).products) }) }));
+  const draw = () => {
+    const d = debtCalc(), st = stockCalc();
+    const dPeople = d.reduce((t, x) => t + x.s.people, 0), dBills = d.reduce((t, x) => t + x.s.bills, 0), dTotal = round2(d.reduce((t, x) => t + x.s.total, 0));
+    const sCount = st.reduce((t, x) => t + x.s.count, 0), sValue = round2(st.reduce((t, x) => t + x.s.value, 0));
+    const lines = sumState.dShow === 'shop' ? d.length : sumState.dShow === 'bill' ? dPeople + dBills : dPeople;
+    box.innerHTML = `<section class="card sum-top"><div class="sum-field"><span class="muted">ร้าน</span><div class="row" style="gap:8px">${chips('shop', [['', 'ทุกร้าน'], ...shops.map((sh) => [sh.id, label(sh)])])}</div></div>
+      <label class="field" style="max-width:200px">ยอด ณ วันที่<input type="date" id="sumDate" value="${sumState.date}" max="${todayIso()}"></label></section>
+    <div class="sum-cards">
+      <section class="card"><div class="sum-h">${icon('debt', 22)}<div><h2>สรุปยอดลูกหนี้</h2><div class="muted" style="font-size:13.5px">รายชื่อลูกหนี้พร้อมเงินต้น ดอกเบี้ย และยอดรวม แยกตามร้าน</div></div></div>
+        <div class="sum-field"><span class="muted">แสดง</span><div class="row" style="gap:8px">${chips('dShow', [['person', 'รายคน'], ['bill', 'รายบิล'], ['shop', 'เฉพาะยอดรวมแต่ละร้าน']])}</div></div>
+        <div class="sum-field"><span class="muted">กรอง</span><div class="row" style="gap:8px">${chips('dFilter', [['all', 'ทั้งหมด'], ['overdue', 'ค้างเกิน 6 เดือน'], ['stale', 'ไม่ชำระเกิน 6 เดือน']])}</div></div>
+        <div class="sum-field"><span class="muted">เรียงตาม</span><div class="row" style="gap:8px">${chips('dSort', [['total', 'ยอดค้างมากสุด'], ['zone', 'หมู่บ้าน'], ['code', 'รหัสลูกค้า']])}</div></div>
+        <label class="row"><input type="checkbox" data-b="dInt" ${sumState.dInt ? 'checked' : ''}> รวมดอกเบี้ยถึงวันที่เลือก</label>
+        <label class="row"><input type="checkbox" data-b="dPhone" ${sumState.dPhone ? 'checked' : ''}> แสดงเบอร์โทร</label>
+        <div class="sum-info">${dPeople} คน · ${dBills} บิล · ยอดรวม <b>${money(dTotal)}</b> · ประมาณ ${Math.max(1, Math.ceil(lines / 38))} แผ่น</div>
+        <div class="row"><button class="btn primary" id="pDebt">${icon('print', 18)}พิมพ์สรุปลูกหนี้</button><button class="btn" id="xDebt">ส่งออก Excel</button></div></section>
+      <section class="card"><div class="sum-h">${icon('box', 22)}<div><h2>รายการสินค้าทั้งหมด</h2><div class="muted" style="font-size:13.5px">สินค้าทุกรายการ คงเหลือ ราคา และมูลค่าสต๊อก แยกตามหมวดหมู่</div></div></div>
+        <div class="sum-field"><span class="muted">หมวดหมู่</span><div class="row" style="gap:8px"><button type="button" class="chip" data-cat="" aria-pressed="${!sumState.pCats.length}">ทุกหมวด</button>${allCats().map((c) => `<button type="button" class="chip" data-cat="${esc(c)}" aria-pressed="${sumState.pCats.includes(c)}">${esc(c)}</button>`).join('')}<button type="button" class="chip" data-cat="__none" aria-pressed="${sumState.pCats.includes('')}">ยังไม่มีหมวด</button></div></div>
+        <div class="sum-field"><span class="muted">กรอง</span><div class="row" style="gap:8px">${chips('pFilter', [['all', 'ทั้งหมด'], ['instock', 'มีของ'], ['low', 'ใกล้หมด'], ['negative', 'ติดลบ'], ['noprice', 'ไม่มีราคา']])}</div></div>
+        <div class="sum-field"><span class="muted">คอลัมน์</span><div class="row" style="gap:14px">${[['stock', 'คงเหลือ'], ['price', 'ราคาขาย'], ['cost', 'ราคาทุน'], ['value', 'มูลค่าทุน'], ['count', 'ช่องว่างไว้นับจริง']].map(([k, t]) => `<label class="row"><input type="checkbox" data-col="${k}" ${sumState.cols[k] ? 'checked' : ''}> ${t}</label>`).join('')}</div></div>
+        <div class="sum-info">${sCount} รายการ · มูลค่าทุน <b>${money(sValue)}</b> · ประมาณ ${Math.max(1, Math.ceil((sCount + st.reduce((t, x) => t + x.s.groups.length * 2, 0)) / 42))} แผ่น</div>
+        <div class="row"><button class="btn primary" id="pStock">${icon('print', 18)}พิมพ์รายการสินค้า</button><button class="btn" id="xStock">ส่งออก Excel</button></div></section>
+    </div>`;
+    $$('[data-k]', box).forEach((b) => b.addEventListener('click', () => { sumState[b.dataset.k] = b.dataset.v; if (b.dataset.k === 'shop') sumState.pCats = []; draw(); }));
+    $$('[data-b]', box).forEach((c) => c.addEventListener('change', () => { sumState[c.dataset.b] = c.checked; draw(); }));
+    $$('[data-col]', box).forEach((c) => c.addEventListener('change', () => { sumState.cols[c.dataset.col] = c.checked; }));
+    $$('[data-cat]', box).forEach((b) => b.addEventListener('click', () => {
+      const c = b.dataset.cat === '__none' ? '' : b.dataset.cat;
+      if (b.dataset.cat === '') sumState.pCats = []; else sumState.pCats = sumState.pCats.includes(c) ? sumState.pCats.filter((x) => x !== c) : [...sumState.pCats, c];
+      draw();
+    }));
+    $('#sumDate', box).addEventListener('change', (e) => { sumState.date = e.target.value || todayIso(); draw(); });
+    $('#pDebt', box).addEventListener('click', () => printDebtSummary(debtCalc(), label));
+    $('#pStock', box).addEventListener('click', () => printStockSummary(stockCalc(), label));
+    $('#xDebt', box).addEventListener('click', () => {
+      const rows = [['ร้าน', 'รหัส', 'ชื่อลูกค้า', 'หมู่บ้าน', 'โทร', 'จำนวนบิล', 'เลขที่บิล', 'วันที่บิล', 'เงินต้น', 'ดอกเบี้ย', 'รวม']];
+      for (const { sh, s } of debtCalc()) for (const r of s.rows) {
+        if (sumState.dShow === 'bill') for (const b of r.bills) rows.push([label(sh), r.code, r.name, r.zone, r.phone, '', b.no, dd(b.date), b.principal, b.interest, b.total]);
+        else rows.push([label(sh), r.code, r.name, r.zone, r.phone, r.bills.length, '', '', r.principal, r.interest, r.total]);
+      }
+      exportXlsx(`สรุปลูกหนี้-${sumState.date}`, [['ลูกหนี้', rows]]);
+    });
+    $('#xStock', box).addEventListener('click', () => {
+      const rows = [['ร้าน', 'หมวดหมู่', 'รหัส', 'ชื่อสินค้า', 'หน่วย', 'คงเหลือ', 'ราคาขาย', 'ราคาทุน', 'มูลค่าทุน']];
+      for (const { sh, s } of stockCalc()) for (const g of s.groups) for (const p of g.items) rows.push([label(sh), g.category || 'ยังไม่มีหมวด', p.code, p.name, p.unit, p.stock ?? '', p.price, p.cost, p.value]);
+      exportXlsx(`รายการสินค้า-${sumState.date}`, [['สินค้า', rows]]);
+    });
+  };
+  draw();
+}
+const sumHead = (title, sub, boxHtml) => (note, page) => `<div class="p-head"><div><div class="p-shop">${title}</div><div>${sub}</div></div>
+  <div class="p-right"><div>ณ วันที่ ${dd(sumState.date)} · พิมพ์ ${new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</div><div>ผู้พิมพ์ ${esc(user?.name || '-')}</div>${note}</div></div>${page === 1 ? boxHtml : ''}`;
+const sumBox = (cells) => `<div class="p-box sum-box">${cells.map(([k, v]) => `<div class="p-cell"><div style="font-size:12px">${k}</div><b>${v}</b></div>`).join('')}</div>`;
+function printDebtSummary(list, label) {
+  const show = sumState.dShow, phone = sumState.dPhone;
+  const cols = phone ? 8 : 7;
+  const people = list.reduce((t, x) => t + x.s.people, 0), bills = list.reduce((t, x) => t + x.s.bills, 0);
+  const T = (k) => round2(list.reduce((t, x) => t + x.s[k], 0));
+  const r2 = (v) => `<td class="r">${money(v)}</td>`;
+  const groups = [];
+  for (const { sh, s } of list) {
+    if (show !== 'shop') {
+      groups.push(`<tr class="sum-grp"><td colspan="${cols}">${esc(label(sh))} · ${s.people} คน · ${s.bills} บิล</td></tr>`);
+      for (const r of s.rows) {
+        groups.push(`<tr><td>${esc(r.code)}</td><td>${esc(r.name)}</td><td>${esc(r.zone)}</td>${phone ? `<td style="white-space:nowrap">${esc(r.phone)}</td>` : ''}<td class="c">${r.bills.length}</td>${r2(r.principal)}${r2(r.interest)}<td class="r"><b>${money(r.total)}</b></td></tr>`
+          + (show === 'bill' ? r.bills.map((b) => `<tr class="sum-sub"><td></td><td colspan="${phone ? 3 : 2}">${dd(b.date)} · ${esc(b.no)}</td><td></td>${r2(b.principal)}${r2(b.interest)}${r2(b.total)}</tr>`).join('') : ''));
+      }
+    }
+    groups.push(`<tr class="p-foot"><td colspan="${cols - 3}" class="r">รวม ${esc(label(sh))}${show === 'shop' ? ` · ${s.people} คน · ${s.bills} บิล` : ''}</td>${r2(s.principal)}${r2(s.interest)}${r2(s.total)}</tr>`);
+  }
+  const filt = { all: '', overdue: ' · เฉพาะที่ค้างเกิน 6 เดือน', stale: ' · เฉพาะที่ไม่ชำระเกิน 6 เดือน' }[sumState.dFilter];
+  printPaged({
+    cls: 'sum-paper',
+    head: sumHead('สรุปยอดลูกหนี้', `${list.length > 1 ? 'ทุกร้าน' : esc(label(list[0].sh))}${filt} · ${sumState.dInt ? 'รวมดอกเบี้ยถึงวันที่' : 'เฉพาะเงินต้น'}`,
+      sumBox([['ร้าน', `${list.length} ร้าน`], ['ลูกหนี้', `${people} คน · ${bills} บิล`], ['ค้างเกิน 6 เดือน', `${list.reduce((t, x) => t + x.s.overdueBills, 0)} บิล`], ['ยอดค้างรวม', money(T('total'))]])),
+    thead: `<thead><tr><th style="width:13mm">รหัส</th><th>ชื่อลูกค้า</th><th style="width:24mm">หมู่บ้าน</th>${phone ? '<th style="width:28mm">โทร</th>' : ''}<th class="c" style="width:11mm">บิล</th><th class="r" style="width:25mm">เงินต้น</th><th class="r" style="width:22mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>`,
+    groups,
+    foot: list.length > 1 ? `<tr class="p-foot sum-grand"><td colspan="${cols - 3}" class="r">รวมทุกร้าน · ${people} คน</td>${r2(T('principal'))}${r2(T('interest'))}${r2(T('total'))}</tr>` : '',
+    after: '',
+  });
+}
+function printStockSummary(list, label) {
+  const c = sumState.cols;
+  const extra = [c.stock && ['คงเหลือ', 'stock'], c.price && ['ราคาขาย', 'price'], c.cost && ['ราคาทุน', 'cost'], c.value && ['มูลค่าทุน', 'value'], c.count && ['นับได้จริง', 'count']].filter(Boolean);
+  const cols = 3 + extra.length;
+  const cell = (p, k) => (k === 'stock' ? `<td class="r"${p.stock < 0 ? ' style="font-weight:700"' : ''}>${p.stock === null ? '-' : qtyFmt(p.stock)}</td>` : k === 'count' ? '<td class="sum-count"></td>' : k === 'value' ? `<td class="r">${p.value ? money(p.value) : '—'}</td>` : `<td class="r">${p[k] ? money(p[k]) : '—'}</td>`);
+  const groups = [];
+  for (const { sh, s } of list) {
+    if (list.length > 1) groups.push(`<tr class="sum-shop"><td colspan="${cols}">${esc(label(sh))} · ${s.count} รายการ</td></tr>`);
+    for (const g of s.groups) {
+      groups.push(`<tr class="sum-grp"><td colspan="${cols}">${esc(g.category || 'ยังไม่มีหมวด')} · ${g.items.length} รายการ</td></tr>`);
+      for (const p of g.items) groups.push(`<tr><td>${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.unit)}</td>${extra.map(([, k]) => cell(p, k)).join('')}</tr>`);
+      if (c.stock || c.value) groups.push(`<tr class="p-foot"><td colspan="3" class="r">รวม ${esc(g.category || 'ยังไม่มีหมวด')}</td>${extra.map(([, k]) => (k === 'stock' ? `<td class="r">${qtyFmt(g.qty)}</td>` : k === 'value' ? `<td class="r">${money(g.value)}</td>` : '<td></td>')).join('')}</tr>`);
+    }
+  }
+  const count = list.reduce((t, x) => t + x.s.count, 0), value = round2(list.reduce((t, x) => t + x.s.value, 0));
+  printPaged({
+    cls: 'sum-paper',
+    head: sumHead('รายการสินค้าทั้งหมด', `${list.length > 1 ? 'ทุกร้าน' : 'ร้าน ' + esc(label(list[0].sh))} · แยกตามหมวดหมู่`,
+      sumBox([['สินค้า', `${count} รายการ`], ['สต๊อกติดลบ', `${list.reduce((t, x) => t + x.s.negative, 0)} รายการ`], ['ยังไม่มีราคาทุน', `${list.reduce((t, x) => t + x.s.noCost, 0)} รายการ`], ['มูลค่าสต๊อก (ราคาทุน)', money(value)]])),
+    thead: `<thead><tr><th style="width:16mm">รหัส</th><th>ชื่อสินค้า</th><th style="width:17mm">หน่วย</th>${extra.map(([t, k]) => `<th class="${k === 'count' ? 'c' : 'r'}" style="width:${k === 'value' ? 25 : k === 'count' ? 24 : 20}mm">${t}</th>`).join('')}</tr></thead>`,
+    groups,
+    foot: c.value ? `<tr class="p-foot sum-grand"><td colspan="${cols - 1 - (c.count ? 1 : 0)}" class="r">มูลค่าสต๊อกรวม (ไม่นับที่ติดลบ)</td><td class="r">${money(value)}</td>${c.count ? '<td></td>' : ''}</tr>` : '',
+    after: '',
+  });
+}
 async function enterShop(id) {
   view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลดข้อมูลร้าน…</div></div>';
   try {
@@ -374,20 +495,21 @@ function sheetHeightMm(html) {
   m.innerHTML = ''; return h;
 }
 function printPaged(parts) {
-  const sheet = (gs, page, total, last) => `<div class="paper">${parts.head(total > 1 ? `<div class="p-sheet">แผ่นที่ ${page}/${total}</div>` : '')}
+  const sheet = (gs, page, total, last) => `<div class="paper${parts.cls ? ' ' + parts.cls : ''}">${parts.head(total > 1 ? `<div class="p-sheet">แผ่นที่ ${page}/${total}</div>` : '', page)}
     <table class="p-table">${parts.thead}<tbody>${gs.join('')}${last ? parts.foot : ''}</tbody></table>
     ${last ? parts.after : `<div class="p-more">มีต่อแผ่นที่ ${page + 1}</div>`}</div>`;
   const fontsReady = Promise.all(['15px Sarabun', 'bold 15px Sarabun'].map((f) => document.fonts?.load(f, 'ใบเสร็จ ABC 0123456789').catch(() => null))).then(() => document.fonts?.ready);
   Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => {
-    const fits = (gs, last) => sheetHeightMm(sheet(gs, 9, 9, last)) <= SHEET_MM;
-    if (fits(parts.groups, true)) { doPrint(sheet(parts.groups, 1, 1, true)); return; }
+    // page 1 may carry more heading (e.g. a summary box), so measure each sheet as the page it will be
+    const fits = (gs, last, page) => sheetHeightMm(sheet(gs, page, 9, last)) <= SHEET_MM;
+    if (fits(parts.groups, true, 1)) { doPrint(sheet(parts.groups, 1, 1, true)); return; }
     const pages = []; let cur = [];
-    for (const g of parts.groups) { if (cur.length && !fits([...cur, g], false)) { pages.push(cur); cur = []; } cur.push(g); }
+    for (const g of parts.groups) { if (cur.length && !fits([...cur, g], false, pages.length + 1)) { pages.push(cur); cur = []; } cur.push(g); }
     // the last sheet also needs room for the totals
     let guard = 0;
-    while (!fits(cur, true) && guard++ < 50) {
+    while (!fits(cur, true, pages.length + 1) && guard++ < 50) {
       const rest = [];
-      while (cur.length > 1 && !fits(cur, true)) rest.unshift(cur.pop());
+      while (cur.length > 1 && !fits(cur, true, pages.length + 1)) rest.unshift(cur.pop());
       if (!rest.length) { pages.push(cur); cur = []; break; } // totals go on a sheet of their own
       pages.push(cur); cur = rest;
     }

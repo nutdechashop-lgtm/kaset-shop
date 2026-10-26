@@ -603,3 +603,23 @@ div.field .seg { align-self: flex-start; font-size: 16px; }
 #printArea.multi .paper:last-child { break-after: auto; page-break-after: auto; }
 .p-sheet { font-weight: 700; margin-top: .5mm; }
 .p-more { text-align: right; font-size: 13px; }
+
+/* super-admin printed summaries */
+.sum-top { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 18px; }
+.sum-top .sum-field { flex: 1 1 420px; }
+.sum-field { display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+.sum-cards { display: flex; gap: 16px; flex-wrap: wrap; }
+.sum-cards > .card { flex: 1 1 420px; margin: 0; }
+.sum-h { display: flex; gap: 12px; align-items: center; }
+.sum-h > svg { width: 44px; height: 44px; padding: 11px; box-sizing: border-box; border-radius: 14px; background: var(--green-soft); color: var(--green); flex: none; }
+.sum-info { background: var(--sf2); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+.sum-cards input[type=checkbox], .sum-top input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--green); }
+.paper.sum-paper { font-size: 13.5px; line-height: 1.28; }
+.sum-paper .p-table { font-size: 13.5px; } .sum-paper .p-table th { font-size: 13.5px; }
+.sum-box .p-cell { flex: 1; border-left: 1px solid #000; } .sum-box .p-cell:first-child { border-left: 0; }
+.sum-box b { font-size: 16px; }
+.sum-paper tr.sum-grp td, .sum-paper tr.sum-shop td { border: 1px solid #000; background: #EFEFEF; font-weight: 700; padding: 1mm 1.6mm; }
+.sum-paper tr.sum-shop td { background: #DDD; }
+.sum-paper tr.sum-sub td { font-size: 12.5px; padding-top: 0; }
+.sum-paper .sum-count { border-bottom: 1px dotted #000 !important; }
+.sum-paper tr.sum-grand td { font-size: 15px; border-top: 2px solid #000; }

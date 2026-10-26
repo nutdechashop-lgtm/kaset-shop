@@ -501,3 +501,40 @@ export async function hashPin(pin, salt) {
   const buf = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}:${pin}`));
   return [...new Uint8Array(buf)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
+
+// ---------- printed summaries for the super-admin ----------
+// Debtors of one shop. opts: { filter: 'all' | 'overdue' (a bill older than 6 months) | 'stale' (no payment for 6 months),
+// sort: 'total' | 'zone' | 'code', withInterest: true }
+export function debtSummary(data, asOf, opts = {}) {
+  const { filter = 'all', sort = 'total', withInterest = true } = opts;
+  const debts = customerDebts(data, asOf);
+  const cus = new Map((data.customers || []).map((c) => [c.code, c]));
+  const limit = new Date(Date.parse(asOf + 'T00:00:00Z') - 180 * 86400000).toISOString().slice(0, 10);
+  const stale = filter === 'stale' ? new Set(stalePayers(data, asOf).map((x) => x.code)) : null;
+  let rows = [];
+  for (const [code, d] of debts) {
+    if (filter === 'overdue' && !d.bills.some((b) => b.date <= limit)) continue;
+    if (stale && !stale.has(code)) continue;
+    const c = cus.get(code) || { code, name: 'รหัส ' + code, zone: '' };
+    const bills = d.bills.map((b) => ({ no: b.no, date: b.date, principal: b.balance.principal, interest: withInterest ? b.balance.interest : 0, total: withInterest ? b.balance.total : b.balance.principal }));
+    rows.push({ code, name: c.name, zone: c.zone || '', phone: c.phone || '', bills, principal: d.principal, interest: withInterest ? d.interest : 0, total: withInterest ? d.total : d.principal });
+  }
+  rows.sort(sort === 'zone' ? (a, b) => a.zone.localeCompare(b.zone, 'th') || a.name.localeCompare(b.name, 'th')
+    : sort === 'code' ? (a, b) => (a.code < b.code ? -1 : 1) : (a, b) => b.total - a.total);
+  const sum = (k) => round2(rows.reduce((s, r) => s + r[k], 0));
+  return { rows, people: rows.length, bills: rows.reduce((s, r) => s + r.bills.length, 0), principal: sum('principal'), interest: sum('interest'), total: sum('total'),
+    overdueBills: rows.reduce((s, r) => s + r.bills.filter((b) => b.date <= limit).length, 0) };
+}
+// Products of one shop. opts: { cats: [..] (empty = all), filter: 'all' | 'instock' | 'low' | 'negative' | 'noprice', categories: shop order }
+export function stockSummary(products, opts = {}) {
+  const { cats = [], filter = 'all', categories = [] } = opts;
+  const order = new Map(categories.map((c, i) => [c, i]));
+  const list = (products || []).filter((p) => !p.deleted && (!cats.length || cats.includes(p.category || ''))
+    && (filter === 'instock' ? !p.noStock && p.stock > 0 : filter === 'low' ? isLow(p) : filter === 'negative' ? !p.noStock && p.stock < 0 : filter === 'noprice' ? !(p.price > 0) : true))
+    .map((p) => ({ code: p.code, name: p.name, unit: p.unit || '', category: p.category || '', stock: p.noStock ? null : Number(p.stock) || 0, price: Number(p.price) || 0, cost: Number(p.cost) || 0,
+      value: !p.noStock && p.stock > 0 && p.cost > 0 ? round2(p.stock * p.cost) : 0 }))
+    .sort((a, b) => (order.has(a.category) ? order.get(a.category) : 1e6) - (order.has(b.category) ? order.get(b.category) : 1e6) || a.name.localeCompare(b.name, 'th'));
+  const groups = [];
+  for (const p of list) { let g = groups[groups.length - 1]; if (!g || g.category !== p.category) groups.push(g = { category: p.category, items: [], qty: 0, value: 0 }); g.items.push(p); if (p.stock > 0) g.qty = round2(g.qty + p.stock); g.value = round2(g.value + p.value); }
+  return { groups, count: list.length, negative: list.filter((p) => p.stock < 0).length, noCost: list.filter((p) => p.stock !== null && !(p.cost > 0)).length, value: round2(list.reduce((s, p) => s + p.value, 0)) };
+}

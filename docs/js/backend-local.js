@@ -199,4 +199,5 @@ export async function useCostPin(shopId, pin) {
   }
   return false;
 }
+export async function shopSummaryData() { const d = data || await getData(); return { customers: d.customers, products: d.products, bills: d.bills.filter((b) => b.status === 'open'), receipts: d.receipts || [] }; }
 export async function shopOverview() { return shopSnapshot(data || await getData(), todayIso()); }

@@ -1,6 +1,6 @@
 // Run: node test/shop.test.mjs
 import assert from 'node:assert/strict';
-import { categoryList, DEFAULT_CATEGORIES, salesReport, closeSummary, stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
+import { debtSummary, stockSummary, categoryList, DEFAULT_CATEGORIES, salesReport, closeSummary, stalePayers, lastPaidDate, isLow, lowStock, receiptLockReason, voidReceipt, changeBillRate, makeTransfer, editTransfer, cancelTransfer, overdueBills, bankList, shopSnapshot, newPin, hashPin, bahtText, editBill, cancelBill, billLockReason, diffLines, createSale, receivePayment, customerDebts, docNo, nextCustomerCode, zones, daySummary, emptyData, DEFAULT_SETTINGS } from '../src/shop.js';
 
 const settings = { ...DEFAULT_SETTINGS, prefix: '01' };
 const data = emptyData();
@@ -199,5 +199,18 @@ assert.deepEqual(lowStock([{ name: 'a', stock: 8, minStock: 10 }, { name: 'b', s
   assert.equal(cr.editHistory[0].before.type, 'cash');
   const { bill: back } = editBill(prods, cr, { lines: cr.lines, type: 'cash' });
   assert.equal(back.type, 'cash'); assert.equal(back.status, 'paid'); assert.equal(back.principalLeft, 0); assert.equal(back.rate, 0); assert.equal(back.customerCode, 'c1');
+}
+{ // summaries
+  const data = { customers: [{ code: 'a', name: 'ก', zone: 'z2', phone: '1' }, { code: 'b', name: 'ข', zone: 'z1' }], receipts: [],
+    bills: [{ no: 'B1', type: 'credit', status: 'open', customerCode: 'a', date: '2026-01-01', total: 100, principalLeft: 100, rate: 0, graceDays: 0 },
+      { no: 'B2', type: 'credit', status: 'open', customerCode: 'b', date: '2026-10-01', total: 300, principalLeft: 300, rate: 0, graceDays: 0 },
+      { no: 'B3', type: 'cash', status: 'paid', customerCode: 'b', date: '2026-10-01', total: 50 }] };
+  const s = debtSummary(data, '2026-10-26');
+  assert.equal(s.people, 2); assert.equal(s.total, 400); assert.equal(s.rows[0].code, 'b'); assert.equal(s.overdueBills, 1);
+  assert.equal(debtSummary(data, '2026-10-26', { filter: 'overdue' }).people, 1);
+  assert.equal(debtSummary(data, '2026-10-26', { sort: 'zone' }).rows[0].code, 'b');
+  const st = stockSummary([{ code: '1', name: 'x', category: 'B', stock: 2, cost: 10, price: 15 }, { code: '2', name: 'y', category: 'A', stock: -1, cost: 5 }, { code: '3', name: 'z', category: '', noStock: true }], { categories: ['A', 'B'] });
+  assert.equal(st.groups[0].category, 'A'); assert.equal(st.value, 20); assert.equal(st.negative, 1); assert.equal(st.count, 3);
+  assert.equal(stockSummary([{ code: '1', name: 'x', stock: 2 }, { code: '2', name: 'y', stock: 0 }], { filter: 'instock' }).count, 1);
 }
 console.log('ALL SHOP CHECKS PASSED');
