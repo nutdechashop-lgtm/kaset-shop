@@ -953,13 +953,15 @@ function viewDebtor(code) {
   }).catch((e) => { if ($('#hist')) $('#hist').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
   if (!d) return;
 
+  const cancelPending = new Set(pendingRequests().filter((r) => r.kind === 'cancel').map((r) => r.billNo));
   $('#bt').innerHTML = `<tr><th></th><th>เลขที่บิล</th><th>วันที่</th><th class="num">ดอก %</th><th class="num">วัน</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>`
     + d.bills.map((b) => {
+      const cancelling = cancelPending.has(b.no);
       const start = b.interestFrom || interestStart(b);
       const days = daysBetween(start, asOf);
       const graceLeft = !b.interestFrom && b.graceDays && start > asOf ? `ปลอดดอกถึง ${thDate(start)}` : '';
-      return `<tr><td><input type="checkbox" data-b="${esc(b.no)}" aria-label="เลือกบิล ${esc(b.no)}" style="width:22px;height:22px;accent-color:var(--green)"></td>
-        <td class="mono"><button class="btn link" data-view="${esc(b.no)}">${esc(b.no)}</button></td><td>${thDate(b.date)}</td><td class="num">${b.rate}</td>
+      return `<tr${cancelling ? ' class="row-cancelling"' : ''}><td>${cancelling ? '' : `<input type="checkbox" data-b="${esc(b.no)}" aria-label="เลือกบิล ${esc(b.no)}" style="width:22px;height:22px;accent-color:var(--green)">`}</td>
+        <td class="mono"><button class="btn link" data-view="${esc(b.no)}">${esc(b.no)}</button>${cancelling ? ' <span class="pill cancel">รออนุมัติยกเลิก · ไม่นำมาคิดยอด</span>' : ''}</td><td>${thDate(b.date)}</td><td class="num">${b.rate}</td>
         <td class="num">${graceLeft ? `<span class="pill">${graceLeft}</span>` : days}</td>
         <td class="num">${money(b.balance.principal)}</td><td class="num">${money(b.balance.interest)}</td><td class="num"><b>${money(b.balance.total)}</b></td>
         <td>${pendingRequests().some((r) => r.billNo === b.no && r.kind === 'rate') ? '<span class="pill">รออนุมัติ</span>' : `<button class="btn small" data-rate="${esc(b.no)}" title="เปลี่ยนอัตราดอก">เปลี่ยน %</button>`}</td></tr>
@@ -970,7 +972,8 @@ function viewDebtor(code) {
 
   const preview = () => {
     $('#payErr').classList.add('hidden');
-    const open = data.bills.filter((b) => b.customerCode === code && b.type === 'credit' && b.status === 'open');
+    // cancelled bills, and bills waiting for the owner to approve a cancel, are never part of a payment or a statement
+    const open = data.bills.filter((b) => b.customerCode === code && b.type === 'credit' && b.status === 'open' && !b.cancelledAt && !cancelPending.has(b.no));
     let res = null;
     if (mode === 'amount') { const a = Number($('#amt').value); if (a > 0) res = allocatePayment(open, a, asOf); }
     else if (selected.size) {

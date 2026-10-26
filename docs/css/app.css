@@ -623,3 +623,5 @@ div.field .seg { align-self: flex-start; font-size: 16px; }
 .sum-paper tr.sum-sub td { font-size: 12.5px; padding-top: 0; }
 .sum-paper .sum-count { border-bottom: 1px dotted #000 !important; }
 .sum-paper tr.sum-grand td { font-size: 15px; border-top: 2px solid #000; }
+tr.row-cancelling td { opacity: .55; text-decoration: line-through; }
+tr.row-cancelling td .pill { text-decoration: none; opacity: 1; }
