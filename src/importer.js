@@ -102,16 +102,24 @@ export function importDatabase(bytes, opts = {}) {
 
   // Bill lines
   const lines = new Map();
-  for (const r of table(reader, 'Data', ['DocType', 'DocNo', 'ProdCode', 'Issue', 'Price', 'IssueAmt', 'DocDate'])) {
+  // A line the old program cancelled (CancelStt '*', e.g. taken off when the bill was edited) is not part of the bill.
+  for (const r of table(reader, 'Data', ['DocType', 'DocNo', 'ProdCode', 'Issue', 'Price', 'IssueAmt', 'DocDate', 'CancelStt'])) {
     if (!/^BS/.test(str(r.DocType))) continue;
     const no = str(r.DocNo);
     const code = prodCode(r.ProdCode);
     const p = prodByCode.get(code);
     (lines.get(no) || lines.set(no, []).get(no)).push({
       code, name: p?.name || code, unit: p?.unit || '', qty: num(r.Issue), price: num(r.Price), amount: num(r.IssueAmt),
-      date: beToIso(r.DocDate),
+      date: beToIso(r.DocDate), cancelled: str(r.CancelStt) === '*',
     });
   }
+  // Bills that are still valid but carried cancelled lines (used to repair data imported before this fix).
+  const fixedLines = [];
+  const liveLines = (no, h) => {
+    const all = lines.get(no) || [];
+    const keep = h && !h.cancelled ? all.filter((l) => !l.cancelled) : all;
+    return (keep.length ? keep : all).map(({ cancelled, ...l }) => l);
+  };
 
   const bills = [];
   let skippedByYear = 0;
@@ -135,14 +143,19 @@ export function importDatabase(bytes, opts = {}) {
       principalLeft: open ? total : 0, accruedInterest: 0,
       paidDate: h.paid ? beToIso(r.PayDate) : null, receiptNo: str(r.ReceiptNo) || null,
       interestPaid: h.paid ? num(r.IntAmt) : 0,
-      lines: lines.get(no) || [], by: str(r.UserDes), source: 'programkaset',
+      lines: liveLines(no, h), by: str(r.UserDes), source: 'programkaset',
     });
+  }
+  for (const [no, h] of heads) {
+    if (h.cancelled || cancelledNos.has(no)) continue;
+    const all = lines.get(no) || [];
+    if (all.some((l) => l.cancelled) && all.some((l) => !l.cancelled)) fixedLines.push({ no, lines: liveLines(no, h) });
   }
   bills.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.no < b.no ? -1 : 1));
 
   // The old program also kept expense/income entries in the product table (ค่าน้ำ, ค่าไฟ, ดอกเบี้ยรับ …).
   // Drop those that were never sold; anything that appears on a sales bill (e.g. ค่าจัดการแปลงนา-ไร่) stays.
-  const soldCodes = new Set([...lines.values()].flat().map((l) => l.code));
+  const soldCodes = new Set([...lines.values()].flat().filter((l) => !l.cancelled).map((l) => l.code));
   const isExpense = (p) => /^(ค่า|ดอกเบี้ย)/.test(p.name.trim()) && !soldCodes.has(p.code);
   const removedNonProducts = products.filter(isExpense).map((p) => p.name);
   for (let i = products.length - 1; i >= 0; i--) if (isExpense(products[i])) { prodByCode.delete(products[i].code); products.splice(i, 1); }
@@ -150,7 +163,7 @@ export function importDatabase(bytes, opts = {}) {
   // Products with no price in the old file: use the last price they were sold at.
   // (looks at every bill in the file, not only the imported year range)
   const lastPrice = new Map();
-  const allLines = [...lines.values()].flat().filter((l) => l.price > 0).sort((x, y) => ((x.date || '') < (y.date || '') ? -1 : 1));
+  const allLines = [...lines.values()].flat().filter((l) => l.price > 0 && !l.cancelled).sort((x, y) => ((x.date || '') < (y.date || '') ? -1 : 1));
   for (const l of allLines) lastPrice.set(l.code, l.price);
   for (const p of products) if (!p.price && lastPrice.has(p.code)) { p.price = lastPrice.get(p.code); p.priceFromHistory = true; }
 
@@ -182,5 +195,5 @@ export function importDatabase(bytes, opts = {}) {
     openCustomers: new Set(openBills.map((b) => b.customerCode)).size,
     receipts: receipts.length, removedNonProducts, warnings,
   };
-  return { shop, customers, products, bills, receipts, summary };
+  return { shop, customers, products, bills, receipts, summary, fixedLines };
 }

@@ -692,6 +692,21 @@ export async function shopSummaryData(shopId) {
   const [c, p, b] = await wrap(() => withTimeout(Promise.all([fb.getDocs(sub(shopId, 'customers')), fb.getDocs(sub(shopId, 'products')), fb.getDocs(fb.query(sub(shopId, 'bills'), fb.where('status', '==', 'open')))]), 120000, 'อ่านข้อมูลสรุป'));
   return { customers: c.docs.map((d) => d.data()), products: p.docs.map((d) => d.data()), bills: b.docs.map((d) => d.data()), receipts: [] };
 }
+// Repair bills imported from the old program: replace their product lines (cancelled lines taken out).
+// Only bills that came from the old program are touched. Returns how many were changed.
+export async function fixBillLines(shopId, list, onProgress) {
+  needOnline('แก้รายการในบิลเก่า');
+  let changed = 0;
+  for (let i = 0; i < list.length; i += 100) {
+    const part = list.slice(i, i + 100);
+    const snaps = await wrap(() => Promise.all(part.map((x) => fb.getDoc(sub(shopId, 'bills', x.no)))));
+    const b = fb.writeBatch(db); let n = 0;
+    snaps.forEach((s, k) => { if (s.exists() && s.data().source === 'programkaset' && JSON.stringify(s.data().lines) !== JSON.stringify(part[k].lines)) { b.update(s.ref, { lines: part[k].lines, linesFixedAt: new Date().toISOString() }); n++; } });
+    if (n) await wrap(() => b.commit());
+    changed += n; onProgress?.(Math.min(1, (i + part.length) / list.length));
+  }
+  return changed;
+}
 export async function shopOverview(shopId) {
   const today = todayIso();
   const [bt, rt, open, rq] = await Promise.all([

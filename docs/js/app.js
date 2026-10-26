@@ -1469,6 +1469,7 @@ function withAudit(raw) {
   wrap('deleteUser', null, (c, r, uid) => ({ action: 'ลบรหัสเข้าระบบ', target: uid }));
   wrap('setUserName', null, (c, r, uid, name) => ({ action: 'แก้ชื่อพนักงาน', target: uid, detail: 'เป็น ' + name }));
   wrap('setUserRole', null, (c, r, uid, role) => ({ action: 'ย้ายตำแหน่ง', target: uid, detail: ROLE[role] || role }));
+  wrap('fixBillLines', null, (c, n) => (n ? { action: 'ตัดรายการที่ยกเลิกออกจากบิลเก่า', detail: `${n} บิล` } : null));
   wrap('replaceShopData', null, (c, r, sid, result) => ({ action: 'นำเข้าข้อมูลเก่า', detail: `ลูกค้า ${result.customers.length} · สินค้า ${result.products.length} · บิล ${result.bills.length}` }));
   wrap('restoreShop', null, (c, r, sid, bk) => ({ action: 'กู้คืนข้อมูล', detail: `จากไฟล์สำรองวันที่ ${bk.exportedAt ? new Date(bk.exportedAt).toLocaleString('th-TH') : '-'}` }));
   wrap('saveClose', null, (c, rec) => ({ action: 'ปิดร้าน', target: thDate(rec.date), detail: `ควรมี ${money(rec.expected)} · นับได้ ${money(rec.counted)} · ${rec.diff === 0 ? 'ตรง' : rec.diff < 0 ? 'ขาด ' + money(-rec.diff) : 'เกิน ' + money(rec.diff)}` }));
@@ -2801,6 +2802,11 @@ async function viewImport() {
     <div class="muted" style="font-size:14px">ลูกค้า สินค้า และสต๊อกล่าสุด นำเข้าทั้งหมดเสมอ · ช่วงปีมีผลกับประวัติบิลและใบเสร็จ</div>
     <div class="row"><button class="btn primary" id="btnPreview">ดูสรุปก่อนนำเข้า</button></div>
   </div></div></section>
+  <section class="card hidden" id="fixCard"><div style="display:flex;flex-direction:column;gap:10px">
+    <h2>แก้บิลที่นำเข้าไปแล้ว: ตัดรายการสินค้าที่ยกเลิกแล้วออก</h2>
+    <div class="muted" style="font-size:14px">ข้อมูลที่นำเข้าก่อนวันที่ 26/10/2569 อาจมีรายการสินค้าที่ถูกยกเลิกในโปรแกรมเก่าติดมาในบิล (เช่น บิลที่เคยแก้แล้วลบรายการออก) ปุ่มนี้แก้เฉพาะรายการสินค้าในบิลที่มาจากโปรแกรมเก่า ไม่ลบหรือเปลี่ยนยอดเงิน บิลที่ขายในโปรแกรมใหม่ และใบเสร็จ</div>
+    <div class="row"><button class="btn primary" id="btnFix">ตรวจและแก้รายการ</button><span id="fixState" class="muted"></span></div>
+  </div></section>
   <section class="card hidden" id="s3"><div class="step"><span class="n">3</span><div style="flex:1;display:flex;flex-direction:column;gap:12px;min-width:0">
     <h2>สรุปข้อมูลที่จะนำเข้า → ${esc(settings.label || settings.name || shopId)}</h2>
     <div class="stats" id="stats"></div><div id="warnings"></div>
@@ -2826,7 +2832,7 @@ async function viewImport() {
     $('#fromYear').innerHTML = opts; $('#toYear').innerHTML = opts;
     $('#fromYear').value = years[0]; $('#toYear').value = years[years.length - 1];
     $('#yearList').innerHTML = years.map((y) => `<span class="stat" style="padding:6px 10px"><span class="k">ปี ${y}</span> <b class="mono">${meta.years[y].toLocaleString()}</b> <span class="k">บิล</span></span>`).join('');
-    $('#s2').classList.remove('off'); $('#s3').classList.add('hidden');
+    $('#s2').classList.remove('off'); $('#s3').classList.add('hidden'); $('#fixCard').classList.remove('hidden');
   };
   $('#pickFolder').addEventListener('change', (e) => {
     const files = [...e.target.files];
@@ -2835,6 +2841,18 @@ async function viewImport() {
     loadFile(main, files);
   });
   $('#pickFile').addEventListener('change', (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+  $('#btnFix').addEventListener('click', async () => {
+    const btn = $('#btnFix'), st = $('#fixState'); btn.disabled = true; st.innerHTML = '<span class="spinner"></span> กำลังอ่านไฟล์…';
+    try {
+      const r = await runImport(bytes, { fromYear: 2400, toYear: 2700, keepOpenBills: true });
+      if (!r.fixedLines?.length) { st.textContent = 'ไม่พบบิลที่มีรายการยกเลิกค้างอยู่ ไม่ต้องแก้'; btn.disabled = false; return; }
+      st.innerHTML = `<span class="spinner"></span> พบ ${r.fixedLines.length} บิลในไฟล์ · กำลังแก้…`;
+      const n = await backend.fixBillLines(shopId, r.fixedLines, (pct) => { st.innerHTML = `<span class="spinner"></span> กำลังแก้… ${Math.round(pct * 100)}%`; });
+      st.textContent = n ? `แก้แล้ว ${n} บิล (บิลอื่นถูกต้องอยู่แล้วหรือไม่ได้นำเข้า)` : 'บิลที่นำเข้าถูกต้องอยู่แล้ว ไม่ต้องแก้';
+      toast(n ? `แก้รายการสินค้าในบิลเก่า ${n} บิลแล้ว` : 'ไม่มีบิลที่ต้องแก้');
+    } catch (e) { st.textContent = ''; message(esc(e.message)); }
+    btn.disabled = false;
+  });
   $('#btnPreview').addEventListener('click', async () => {
     const fromYear = +$('#fromYear').value, toYear = +$('#toYear').value;
     if (fromYear > toYear) { message('ปีเริ่มต้องไม่มากกว่าปีสิ้นสุด'); return; }

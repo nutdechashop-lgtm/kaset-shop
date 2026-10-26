@@ -200,4 +200,9 @@ export async function useCostPin(shopId, pin) {
   return false;
 }
 export async function shopSummaryData() { const d = data || await getData(); return { customers: d.customers, products: d.products, bills: d.bills.filter((b) => b.status === 'open'), receipts: d.receipts || [] }; }
+export async function fixBillLines(shopId, list) {
+  const m = new Map(list.map((x) => [x.no, x.lines])); let changed = 0;
+  for (const b of data.bills) if (b.source === 'programkaset' && m.has(b.no) && JSON.stringify(b.lines) !== JSON.stringify(m.get(b.no))) { b.lines = m.get(b.no); changed++; }
+  await saveData(data); return changed;
+}
 export async function shopOverview() { return shopSnapshot(data || await getData(), todayIso()); }
