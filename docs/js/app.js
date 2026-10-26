@@ -74,6 +74,7 @@ const ICON = {
   key: '<circle cx="8" cy="15" r="4"/><path d="M10.8 12.2 21 2M17 6l3 3M15 8l2 2"/>',
   upload: '<path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+  print: '<path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/>',
   auto: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
@@ -392,6 +393,30 @@ function printBill(bill) {
         <div class="p-split p-grand"><span>รวมทั้งสิ้น</span><span>${money(bill.total)}</span></div></div>
     </div>
     <div class="p-sign four"><div>ผู้รับสินค้า</div><div>ผู้ส่งสินค้า</div><div>ผู้อนุมัติ</div><div>ผู้ออกบิล</div></div>
+  </div>`;
+  doPrint(html);
+}
+// Quick print from the payment page: what the customer is about to pay (nothing is saved).
+function printPayStatement(code, asOf, { rows, res }) {
+  const c = custBy().get(code);
+  const now = new Date(), p2 = (n) => String(n).padStart(2, '0');
+  const totalInt = round2(res.totalInterest), totalPr = round2(res.totalPrincipal), grand = round2(totalInt + totalPr);
+  const html = `<div class="paper stmt">
+    ${paperHead('ใบแจ้งยอดชำระ', `<div>พิมพ์วันที่ ${dd(todayIso())} ${p2(now.getHours())}:${p2(now.getMinutes())}</div>`)}
+    <div class="p-box stmt-cust"><div class="p-cell"><div style="font-size:13px">ลูกค้า</div><div class="stmt-name">${c ? `(${esc(c.code)}) ${esc(c.name)}` : esc(code)}</div>${c?.phone ? `<div class="stmt-tel">โทร ${esc(c.phone)}</div>` : ''}${c?.zone ? `<div>ที่อยู่ ${esc(c.zone)}</div>` : ''}</div>
+      <div class="p-cell p-side"><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(asOf)}</div><div><b>จำนวนบิล</b> ${rows.length} บิล</div><div><b>ผู้พิมพ์</b> ${esc(user?.name || '-')}</div></div></div>
+    <table class="p-table"><thead><tr><th class="c" style="width:10mm">ลำดับ</th><th style="width:26mm">วันที่บิล</th><th>เลขที่บิล</th><th class="r" style="width:25mm">ตัดดอกเบี้ย</th><th class="r" style="width:27mm">ตัดเงินต้น</th><th class="r" style="width:37mm;white-space:nowrap">เงินต้นรวมดอกเบี้ย</th></tr></thead>
+    <tbody>${rows.map((r, i) => `<tr><td class="c">${i + 1}.</td><td>${dd(r.date)}</td><td>${esc(r.no)}</td><td class="r">${money(r.payInterest)}</td><td class="r">${money(r.payPrincipal)}</td><td class="r"><b>${money(round2(r.payInterest + r.payPrincipal))}</b>${r.principalLeft > 0 ? `<div style="font-size:12px">เหลือต้น ${money(r.principalLeft)}</div>` : ''}</td></tr>${r.items?.length ? `<tr class="p-items"><td></td><td colspan="5"><table class="p-itab">${r.items.map((l, k) => `<tr><td class="c">${k + 1})</td><td>${esc(l.name)}</td><td class="r">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></td></tr>` : ''}`).join('')}
+      <tr class="p-foot"><td colspan="3" class="r">รวม ${rows.length} บิล</td><td class="r">${money(totalInt)}</td><td class="r">${money(totalPr)}</td><td class="r">${money(grand)}</td></tr></tbody></table>
+    <div class="p-box p-sum">
+      <div class="p-notes"><div class="p-remark">หมายเหตุ : ยอดนี้คิดดอกเบี้ยถึงวันที่ ${dd(asOf)} · ชำระหลังวันนี้ดอกเบี้ยจะเพิ่มขึ้น</div><div class="p-words">(${bahtText(grand)})</div></div>
+      <div class="p-cell p-totals" style="width:84mm">
+        <div class="p-split"><span>รวมดอกเบี้ย</span><span>${money(totalInt)}</span></div>
+        <div class="p-split"><span>รวมเงินต้น</span><span>${money(totalPr)}</span></div>
+        <div class="p-split stmt-grand"><span>ยอดชำระทั้งสิ้น</span><span>${money(grand)}</span></div>
+      </div>
+    </div>
+    <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>
   </div>`;
   doPrint(html);
 }
@@ -754,7 +779,7 @@ function viewDebtor(code) {
     <div class="muted" id="billHint" style="font-size:14px">ตัดดอกเบี้ยก่อน แล้วตัดเงินต้นจากบิลเก่าสุด</div>
     <div class="scroll"><table id="alloc"></table></div>
     <div class="err hidden" id="payErr"></div>
-    <div class="row"><button class="btn primary" id="pay">บันทึกรับชำระ</button></div>
+    <div class="row"><button class="btn primary" id="pay">บันทึกรับชำระ</button><button class="btn" id="quickPrint" disabled title="พิมพ์ยอดที่จะชำระให้ลูกค้าดูก่อน ยังไม่บันทึกรับเงิน">${icon('print', 20)}พิมพ์ด่วน (ใบแจ้งยอด)</button></div>
   </section>` : ''}
   <section class="card">
     <h2>ประวัติรับชำระ</h2>
@@ -797,10 +822,15 @@ function viewDebtor(code) {
       res = allocatePayment(chosen, round2(chosen.reduce((s, b) => s + billBalance(b, asOf).total, 0)), asOf);
     }
     const rows = res ? res.rows.filter((r) => r.payInterest || r.payPrincipal) : [];
-    $('#alloc').innerHTML = rows.length ? `<tr><th>บิลที่ถูกตัด</th><th class="num">ตัดดอกเบี้ย</th><th class="num">ตัดเงินต้น</th><th class="num">เงินต้นคงเหลือ</th></tr>`
-      + rows.map((r) => `<tr><td><span class="mono">${esc(r.no)}</span>${itemsHtml(billItems(open.find((b) => b.no === r.no)))}</td><td class="num">${money(r.payInterest)}</td><td class="num">${money(r.payPrincipal)}</td><td class="num">${r.principalLeft > 0 ? money(r.principalLeft) : '<span class="pill cash">ปิดบิล</span>'}</td></tr>`).join('')
-      + `<tr><td><b>รวม</b></td><td class="num"><b>${money(res.totalInterest)}</b></td><td class="num"><b>${money(res.totalPrincipal)}</b></td><td class="num">${res.change > 0 ? `เงินทอน <b>${money(res.change)}</b>` : ''}</td></tr>` : '';
+    const billOf = (no) => open.find((b) => b.no === no);
+    lastAlloc = rows.length ? { rows: rows.map((r) => ({ ...r, date: billOf(r.no)?.date, items: billItems(billOf(r.no)) })), res } : null;
+    $('#quickPrint').disabled = !rows.length;
+    $('#alloc').innerHTML = rows.length ? `<tr><th>วันที่บิล · เลขที่บิล</th><th class="num">ตัดดอกเบี้ย</th><th class="num">ตัดเงินต้น</th><th class="num">เงินต้นรวมดอกเบี้ย</th></tr>`
+      + rows.map((r) => `<tr><td><span class="muted" style="font-size:13px">${thDate(billOf(r.no)?.date)}</span> <span class="mono">${esc(r.no)}</span>${itemsHtml(billItems(billOf(r.no)))}</td><td class="num">${money(r.payInterest)}</td><td class="num">${money(r.payPrincipal)}</td><td class="num"><b>${money(round2(r.payInterest + r.payPrincipal))}</b>${r.principalLeft > 0 ? `<div class="muted" style="font-size:12.5px">เหลือต้น ${money(r.principalLeft)}</div>` : '<div><span class="pill cash">ปิดบิล</span></div>'}</td></tr>`).join('')
+      + `<tr><td><b>รวม ${rows.length} บิล</b></td><td class="num"><b>${money(res.totalInterest)}</b></td><td class="num"><b>${money(res.totalPrincipal)}</b></td><td class="num"><b class="alloc-total">${money(round2(res.totalInterest + res.totalPrincipal))}</b>${res.change > 0 ? `<div class="muted" style="font-size:13px">เงินทอน ${money(res.change)}</div>` : ''}</td></tr>` : '';
   };
+  let lastAlloc = null;
+  $('#quickPrint').addEventListener('click', () => { if (lastAlloc) printPayStatement(code, asOf, lastAlloc); });
   $$('[data-m]').forEach((b) => b.addEventListener('click', () => {
     mode = b.dataset.m;
     $$('[data-m]').forEach((x) => x.setAttribute('aria-pressed', x === b));

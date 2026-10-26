@@ -587,3 +587,11 @@ mark { background: var(--orange-soft); }
 .tag.cr { background: var(--orange-soft); color: var(--orange-ink); } .tag.rp { background: var(--green-soft); color: var(--green); } .tag.x { background: var(--err-bg); color: var(--red); }
 div.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
 div.field .seg { align-self: flex-start; font-size: 16px; }
+
+/* quick print from the payment page */
+.stmt-cust { border-width: 1.5px; }
+.stmt-name { font-size: 20px; font-weight: 700; }
+.stmt-tel { font-size: 17px; font-weight: 700; }
+.stmt-grand { border-top: 1.5px solid #000; padding-top: 1.5mm; margin-top: 1mm; align-items: baseline; font-weight: 700; }
+.stmt-grand span:first-child { font-size: 17px; } .stmt-grand span:last-child { font-size: 22px; }
+.alloc-total { font-size: 20px; color: var(--green); }
