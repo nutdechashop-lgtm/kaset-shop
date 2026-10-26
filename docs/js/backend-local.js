@@ -100,6 +100,7 @@ export async function listUsers() { return data?.demoUsers || [USER]; }
 export async function createUser() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }
 export async function setUserActive() {}
 export function heartbeat() { return Promise.resolve(); }
+export async function setUserName(uid, name) { const u = data?.demoUsers?.find((x) => x.uid === uid); if (u) { u.name = name; await saveData(data); } }
 export async function setUserRole(uid, role, shops) { const u = data?.demoUsers?.find((x) => x.uid === uid); if (u) { Object.assign(u, { role, shops }); await saveData(data); } }
 export async function deleteUser(uid) { if (data?.demoUsers) { data.demoUsers = data.demoUsers.filter((u) => u.uid !== uid); await saveData(data); } }
 export async function changeMyPin() { throw new Error('โหมดทดสอบไม่มีระบบรหัสพนักงาน'); }

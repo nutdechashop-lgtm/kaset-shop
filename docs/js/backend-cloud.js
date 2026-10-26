@@ -474,6 +474,7 @@ export async function deleteUser(uid) {
   if (cfg.data()?.adminUid === uid) throw new Error('รหัสแอดมินใหญ่คนแรกลบไม่ได้');
   await wrap(() => fb.deleteDoc(fb.doc(db, 'users', uid)));
 }
+export async function setUserName(uid, name) { if (!name?.trim()) throw new Error('ใส่ชื่อ'); await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { name: name.trim() })); if (me?.uid === uid) me.name = name.trim(); }
 export async function setUserRole(uid, role, shops) { await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { role, shops })); }
 export async function setUserActive(uid, active) { await wrap(() => fb.updateDoc(fb.doc(db, 'users', uid), { active })); }
 export async function changeMyPin(oldPin, newPin) {

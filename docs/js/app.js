@@ -1275,6 +1275,7 @@ function withAudit(raw) {
   wrap('createUser', null, (c, r, u) => ({ action: 'เพิ่มรหัสเข้าระบบ', target: u.code, detail: `${u.name} · ${ROLE[u.role] || u.role}` }));
   wrap('setUserActive', null, (c, r, uid, on) => ({ action: on ? 'เปิดรหัส' : 'ปิดรหัส', target: uid }));
   wrap('deleteUser', null, (c, r, uid) => ({ action: 'ลบรหัสเข้าระบบ', target: uid }));
+  wrap('setUserName', null, (c, r, uid, name) => ({ action: 'แก้ชื่อพนักงาน', target: uid, detail: 'เป็น ' + name }));
   wrap('setUserRole', null, (c, r, uid, role) => ({ action: 'ย้ายตำแหน่ง', target: uid, detail: ROLE[role] || role }));
   wrap('replaceShopData', null, (c, r, sid, result) => ({ action: 'นำเข้าข้อมูลเก่า', detail: `ลูกค้า ${result.customers.length} · สินค้า ${result.products.length} · บิล ${result.bills.length}` }));
   wrap('restoreShop', null, (c, r, sid, bk) => ({ action: 'กู้คืนข้อมูล', detail: `จากไฟล์สำรองวันที่ ${bk.exportedAt ? new Date(bk.exportedAt).toLocaleString('th-TH') : '-'}` }));
@@ -2472,7 +2473,7 @@ async function viewUsers(opts = {}) {
     ${users.sort((a, b) => (a.code < b.code ? -1 : 1)).map((u) => `<tr><td class="mono">${esc(u.code)}</td><td>${esc(u.name)}</td><td>${ROLE[u.role] || esc(u.role)}</td>
       <td>${u.role === 'admin' ? 'ทุกร้าน' : (u.shops || []).map((s) => esc(shopLabel(s))).join(', ')}</td>
       <td>${seenCell(u, shopLabel)}</td>
-      <td>${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle="${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid && u.role !== 'admin' ? ` <button class="btn small" data-move="${esc(u.uid)}">ย้ายตำแหน่ง</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
+      <td>${asAdmin || u.uid === user.uid || ['staff', 'secretary'].includes(u.role) ? `<button class="btn small" data-rename-u="${esc(u.uid)}">แก้ชื่อ</button> ` : ''}${u.uid !== user.uid && (asAdmin || ['staff', 'secretary'].includes(u.role)) ? `<button class="btn small" data-toggle=""${esc(u.uid)}" data-active="${u.active ? 1 : 0}">${u.active ? 'ปิดรหัส' : 'เปิดรหัส'}</button>` : ''}${canDelete && u.uid !== user.uid && u.role !== 'admin' ? ` <button class="btn small" data-move="${esc(u.uid)}">ย้ายตำแหน่ง</button>` : ''}${canDelete && u.uid !== user.uid ? ` <button class="btn small" data-deluser="${esc(u.uid)}" data-code="${esc(u.code)}" data-name="${esc(u.name)}" style="color:var(--red)">ลบ</button>` : ''}</td></tr>`).join('')}
     </table></div>
     <div class="muted" style="font-size:13px">ลืม PIN: ปิดรหัสเดิมแล้วสร้างรหัสใหม่ · เปลี่ยน PIN ของตัวเองได้ด้านล่าง</div>
   </section>
@@ -2486,6 +2487,21 @@ async function viewUsers(opts = {}) {
     </form></section>` : ''}`;
   $('#ureload', box)?.addEventListener('click', again);
   $$('[data-uf]', box).forEach((b) => b.addEventListener('click', () => { usersFilter = b.dataset.uf; again(); }));
+  $$('[data-rename-u]').forEach((b) => b.addEventListener('click', () => {
+    const u = users.find((x) => x.uid === b.dataset.renameU); if (!u) return;
+    openDialog(`<h2>แก้ชื่อ <span class="mono">${esc(u.code)}</span></h2>
+      <label class="field">ชื่อ<input type="text" name="name" value="${esc(u.name)}" required autocomplete="off"></label>
+      <div class="muted" style="font-size:13px">รหัสและ PIN เดิมใช้ต่อได้ · บิลที่เคยทำไว้ยังแสดงชื่อเดิม</div>
+      <div class="err hidden dlg-err"></div>
+      <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
+      const name = f.name.value.trim();
+      if (!name) throw new Error('ใส่ชื่อ');
+      if (name === u.name) return;
+      await backend.setUserName(u.uid, name);
+      if (u.uid === user.uid) { user.name = name; drawHeader(); }
+      toast(`เปลี่ยนชื่อเป็น ${name} แล้ว`); setTimeout(again, 0);
+    });
+  }));
   $$('[data-toggle]').forEach((b) => b.addEventListener('click', async () => {
     const on = b.dataset.active !== '1';
     if (!confirm(on ? 'เปิดใช้รหัสนี้?' : 'ปิดรหัสนี้? คนที่ใช้รหัสนี้จะเข้าระบบไม่ได้')) return;

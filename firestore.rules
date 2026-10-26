@@ -30,10 +30,10 @@ service cloud.firestore {
       allow update: if isAdmin()
         // everyone stamps their own "last used" time
         || (active() && uid == request.auth.uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen', 'seenShop', 'seenDevice', 'away']))
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen', 'seenShop', 'seenDevice', 'away', 'name']))
         || (isOwner() && resource.data.role in ['staff', 'secretary']
             && resource.data.shops.hasAny(me().shops)
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active']));
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active', 'name']));
       allow delete: if isAdmin();
     }
 
