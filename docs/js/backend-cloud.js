@@ -55,31 +55,56 @@ async function loadProfile(u) {
   const s = await fb.getDoc(fb.doc(db, 'users', u.uid));
   return s.exists() ? { uid: u.uid, ...s.data() } : { uid: u.uid, code: u.email?.split('@')[0], missing: true };
 }
-// Staff codes are remembered only until the program / browser window is closed; owners and admins stay signed in.
+// Staff must type their PIN again every time the program is opened; owners and admins stay signed in.
+// The sign-in itself is kept on the device, so the PIN can be checked without internet (against a salted,
+// stretched hash of the last code that signed in on this device — the PIN itself is never stored).
 const STAFF_FLAG = 'kaset-staff-session';
+const DEV_KEY = 'kaset-device-login';
+const devLogin = { get: () => { try { return JSON.parse(localStorage.getItem(DEV_KEY) || 'null'); } catch { return null; } }, set: (v) => { try { v ? localStorage.setItem(DEV_KEY, JSON.stringify(v)) : localStorage.removeItem(DEV_KEY); } catch { /* ignore */ } } };
+async function pinHash(code, pin, salt) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(String(pin)), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt + '|' + String(code).trim().toLowerCase()), iterations: 150000 }, key, 256);
+  return [...new Uint8Array(bits)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function rememberDevice(profile, code, pin) {
+  try { const salt = crypto.getRandomValues(new Uint32Array(4)).join('-'); devLogin.set({ uid: profile.uid, code: String(code).trim().toLowerCase(), salt, hash: await pinHash(code, pin, salt), profile: { ...profile, lastSeen: null } }); } catch { /* offline sign-in just won't be available */ }
+}
 const flag = { get: () => { try { return sessionStorage.getItem(STAFF_FLAG); } catch { return null; } }, set: (v) => { try { v ? sessionStorage.setItem(STAFF_FLAG, '1') : sessionStorage.removeItem(STAFF_FLAG); } catch { /* ignore */ } } };
 async function applySessionRule(profile) {
-  if (profile?.role === 'staff') { await fb.setPersistence(auth, fb.browserSessionPersistence).catch(() => {}); flag.set(true); }
-  else { await fb.setPersistence(auth, fb.browserLocalPersistence).catch(() => {}); flag.set(false); }
+  await fb.setPersistence(auth, fb.browserLocalPersistence).catch(() => {});
+  flag.set(profile?.role === 'staff');
 }
 export function init() {
   return new Promise((resolve) => {
     const off = fb.onAuthStateChanged(auth, async (u) => {
       off();
-      try { me = await loadProfile(u); } catch { me = null; }
+      const saved = devLogin.get();
+      try { me = await loadProfile(u); } catch { me = u && saved?.uid === u.uid ? { ...saved.profile } : null; } // no internet: last known profile
       if (me && (me.missing || !me.active)) { await fb.signOut(auth); me = null; }
-      // A staff sign-in left over from an earlier window (e.g. saved before this rule existed): sign in again.
-      if (me && me.role === 'staff' && !flag.get()) { await fb.signOut(auth); me = null; }
+      // Staff: the program was closed since the last PIN → ask for the PIN again (works without internet too).
+      if (me && me.role === 'staff' && !flag.get()) { resolve({ locked: true, code: me.code, name: me.name }); return; }
       resolve(me);
     });
   });
 }
 export async function signIn(code, pin) {
   checkCode(code);
+  if (!online()) {
+    // No internet: only the code that is still signed in on this device, checked against its saved PIN hash.
+    const saved = devLogin.get();
+    if (!saved || saved.code !== String(code).trim().toLowerCase() || auth.currentUser?.uid !== saved.uid)
+      throw new Error('ไม่มีอินเทอร์เน็ต · ตอนนี้เข้าได้เฉพาะรหัสที่เข้าใช้ล่าสุดในเครื่องนี้ (และยังไม่ได้กดออกจากระบบ) · รหัสอื่นต้องต่ออินเทอร์เน็ตก่อน');
+    if (await pinHash(code, pin, saved.salt) !== saved.hash) throw new Error('รหัสหรือ PIN ไม่ถูกต้อง');
+    try { me = await loadProfile(auth.currentUser); } catch { me = { ...saved.profile }; }
+    if (!me || me.missing || !me.active) throw new Error('รหัสนี้ถูกปิดใช้งาน');
+    flag.set(me.role === 'staff');
+    return me;
+  }
   const cred = await wrap(() => fb.signInWithEmailAndPassword(auth, codeToEmail(code), String(pin)));
   me = await wrap(() => loadProfile(cred.user));
   if (!me || me.missing || !me.active) { await fb.signOut(auth); me = null; throw new Error('รหัสนี้ถูกปิดใช้งาน หรือยังไม่ได้ตั้งสิทธิ์'); }
   await applySessionRule(me);
+  await rememberDevice(me, code, pin);
   return me;
 }
 export async function signOut() { await Promise.race([heartbeat('', true), new Promise((r) => setTimeout(r, 1500))]); closeShop(); await fb.signOut(auth); me = null; flag.set(false); }

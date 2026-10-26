@@ -194,20 +194,23 @@ function onRemoteChange(kind) {
 async function start() {
   view.innerHTML = '<div class="card"><div class="row"><span class="spinner"></span> กำลังโหลด…</div></div>';
   user = await backend.init();
+  if (user?.locked) { const lock = user; user = null; drawHeader(); return viewLogin(lock); }
   drawHeader();
   if (!user) return viewLogin();
   viewShopPicker();
 }
 
-async function viewLogin() {
+async function viewLogin(lock = null) {
   drawHeader();
-  const firstRun = await backend.bootstrapNeeded();
+  const firstRun = lock ? false : await backend.bootstrapNeeded();
+  const off = navigator.onLine === false;
   view.innerHTML = `<section class="card" style="max-width:420px;margin:24px auto;width:100%">
     <img src="icons/logo.png" alt="${APP_NAME}" class="login-logo" width="132" height="132"><div class="app-title">${APP_NAME}</div>
     ${firstRun ? `<h2>ตั้งค่าครั้งแรก: สร้างรหัสแอดมินใหญ่</h2>
-      <div class="muted" style="font-size:14px">ทำครั้งเดียว รหัสนี้เห็นทุกร้าน และใช้สร้างรหัสให้เจ้าของร้านและพนักงาน</div>` : '<h2>เข้าสู่ระบบ</h2>'}
+      <div class="muted" style="font-size:14px">ทำครั้งเดียว รหัสนี้เห็นทุกร้าน และใช้สร้างรหัสให้เจ้าของร้านและพนักงาน</div>` : lock ? `<h2>ใส่ PIN เพื่อเข้าใช้งาน</h2><div class="muted" style="font-size:14px">${esc(lock.name || '')} · ใส่ PIN ทุกครั้งที่เปิดโปรแกรม (ไม่มีเน็ตก็เข้าได้) · จะใช้รหัสอื่น ให้แก้ช่องรหัส</div>` : '<h2>เข้าสู่ระบบ</h2>'}
+    ${off && !lock ? '<div class="note">ไม่มีอินเทอร์เน็ต · เข้าได้เฉพาะรหัสที่เข้าใช้ล่าสุดในเครื่องนี้และยังไม่ได้กดออกจากระบบ</div>' : ''}
     <form id="lf" style="display:flex;flex-direction:column;gap:12px">
-      <label class="field">รหัส<input type="text" name="code" autocomplete="username" required value="${esc(firstRun ? '' : lsGet('lastCode') || '')}" style="font-family:var(--mono);font-size:20px"></label>
+      <label class="field">รหัส<input type="text" name="code" autocomplete="username" required value="${esc(firstRun ? '' : lock?.code || lsGet('lastCode') || '')}" style="font-family:var(--mono);font-size:20px"></label>
       ${firstRun ? '<label class="field">ชื่อ<input type="text" name="name" required></label>' : ''}
       <label class="field">PIN 6 หลัก<input type="password" name="pin" inputmode="numeric" maxlength="6" autocomplete="current-password" required style="font-family:var(--mono);font-size:20px;letter-spacing:6px"></label>
       ${firstRun ? '<label class="field">PIN อีกครั้ง<input type="password" name="pin2" inputmode="numeric" maxlength="6" required style="font-family:var(--mono);font-size:20px;letter-spacing:6px"></label>' : ''}
