@@ -361,6 +361,44 @@ function fitsHalf(area) {
   paper.style.height = ''; area.style.cssText = keep;
   return mm <= 135;
 }
+// Long documents over several A4 sheets: every sheet repeats the full heading (shop, title, customer,
+// table head) and says "แผ่นที่ x/y"; a bill and its product lines are never split between sheets.
+// parts: { head(pageNote) → html, thead, groups: [html per bill], foot: total row html, after: html below the table }
+const SHEET_MM = 279;
+function sheetHeightMm(html) {
+  let m = $('#pmeasure');
+  if (!m) { m = document.createElement('div'); m.id = 'pmeasure'; m.style.cssText = 'position:absolute;left:-10000px;top:0;width:210mm;padding:0 9mm;box-sizing:border-box;visibility:hidden'; document.body.appendChild(m); }
+  m.innerHTML = html;
+  const p = $('.paper', m); p.style.height = 'auto';
+  const h = p.getBoundingClientRect().height * 25.4 / 96;
+  m.innerHTML = ''; return h;
+}
+function printPaged(parts) {
+  const sheet = (gs, page, total, last) => `<div class="paper">${parts.head(total > 1 ? `<div class="p-sheet">แผ่นที่ ${page}/${total}</div>` : '')}
+    <table class="p-table">${parts.thead}<tbody>${gs.join('')}${last ? parts.foot : ''}</tbody></table>
+    ${last ? parts.after : `<div class="p-more">มีต่อแผ่นที่ ${page + 1}</div>`}</div>`;
+  const fontsReady = Promise.all(['15px Sarabun', 'bold 15px Sarabun'].map((f) => document.fonts?.load(f, 'ใบเสร็จ ABC 0123456789').catch(() => null))).then(() => document.fonts?.ready);
+  Promise.race([fontsReady, new Promise((r) => setTimeout(r, 2500))]).then(() => {
+    const fits = (gs, last) => sheetHeightMm(sheet(gs, 9, 9, last)) <= SHEET_MM;
+    if (fits(parts.groups, true)) { doPrint(sheet(parts.groups, 1, 1, true)); return; }
+    const pages = []; let cur = [];
+    for (const g of parts.groups) { if (cur.length && !fits([...cur, g], false)) { pages.push(cur); cur = []; } cur.push(g); }
+    // the last sheet also needs room for the totals
+    let guard = 0;
+    while (!fits(cur, true) && guard++ < 50) {
+      const rest = [];
+      while (cur.length > 1 && !fits(cur, true)) rest.unshift(cur.pop());
+      if (!rest.length) { pages.push(cur); cur = []; break; } // totals go on a sheet of their own
+      pages.push(cur); cur = rest;
+    }
+    pages.push(cur);
+    const area = $('#printArea');
+    area.className = 'a4 multi';
+    area.innerHTML = pages.map((gs, i) => sheet(gs, i + 1, pages.length, i === pages.length - 1)).join('');
+    setTimeout(() => window.print(), 80);
+  });
+}
+const itemsTable = (it) => (it?.length ? `<tr class="p-items"><td></td><td colspan="5"><table class="p-itab">${it.map((l, k) => `<tr><td class="c">${k + 1})</td><td>${esc(l.name)}</td><td class="r">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></td></tr>` : '');
 const dt = (iso) => { if (!iso) return ''; const d = new Date(iso); const p = (n) => String(n).padStart(2, '0'); return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear() + 543} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const dd = (iso) => { if (!iso) return ''; const [y, m, d] = iso.split('-'); return `${d}/${m}/${+y + 543}`; };
 function paperHead(title, right) {
@@ -401,47 +439,43 @@ function printPayStatement(code, asOf, { rows, res }) {
   const c = custBy().get(code);
   const now = new Date(), p2 = (n) => String(n).padStart(2, '0');
   const totalInt = round2(res.totalInterest), totalPr = round2(res.totalPrincipal), grand = round2(totalInt + totalPr);
-  const html = `<div class="paper stmt">
-    ${paperHead('ใบแจ้งยอดชำระ', `<div>พิมพ์วันที่ ${dd(todayIso())} ${p2(now.getHours())}:${p2(now.getMinutes())}</div>`)}
-    <div class="p-box stmt-cust"><div class="p-cell"><div style="font-size:13px">ลูกค้า</div><div class="stmt-name">${c ? `(${esc(c.code)}) ${esc(c.name)}` : esc(code)}</div>${c?.phone ? `<div class="stmt-tel">โทร ${esc(c.phone)}</div>` : ''}${c?.zone ? `<div>ที่อยู่ ${esc(c.zone)}</div>` : ''}</div>
-      <div class="p-cell p-side"><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(asOf)}</div><div><b>จำนวนบิล</b> ${rows.length} บิล</div><div><b>ผู้พิมพ์</b> ${esc(user?.name || '-')}</div></div></div>
-    <table class="p-table"><thead><tr><th class="c" style="width:10mm">ลำดับ</th><th style="width:26mm">วันที่บิล</th><th>เลขที่บิล</th><th class="r" style="width:25mm">ตัดดอกเบี้ย</th><th class="r" style="width:27mm">ตัดเงินต้น</th><th class="r" style="width:37mm;white-space:nowrap">เงินต้นรวมดอกเบี้ย</th></tr></thead>
-    <tbody>${rows.map((r, i) => `<tr><td class="c">${i + 1}.</td><td>${dd(r.date)}</td><td>${esc(r.no)}</td><td class="r">${money(r.payInterest)}</td><td class="r">${money(r.payPrincipal)}</td><td class="r"><b>${money(round2(r.payInterest + r.payPrincipal))}</b>${r.principalLeft > 0 ? `<div style="font-size:12px">เหลือต้น ${money(r.principalLeft)}</div>` : ''}</td></tr>${r.items?.length ? `<tr class="p-items"><td></td><td colspan="5"><table class="p-itab">${r.items.map((l, k) => `<tr><td class="c">${k + 1})</td><td>${esc(l.name)}</td><td class="r">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></td></tr>` : ''}`).join('')}
-      <tr class="p-foot"><td colspan="3" class="r">รวม ${rows.length} บิล</td><td class="r">${money(totalInt)}</td><td class="r">${money(totalPr)}</td><td class="r">${money(grand)}</td></tr></tbody></table>
-    <div class="p-box p-sum">
-      <div class="p-notes"><div class="p-remark">หมายเหตุ : ยอดนี้คิดดอกเบี้ยถึงวันที่ ${dd(asOf)} · ชำระหลังวันนี้ดอกเบี้ยจะเพิ่มขึ้น</div><div class="p-words">(${bahtText(grand)})</div></div>
+  printPaged({
+    head: (sheetNote) => `${paperHead('ใบแจ้งยอดชำระ', `<div>พิมพ์วันที่ ${dd(todayIso())} ${p2(now.getHours())}:${p2(now.getMinutes())}</div>${sheetNote}`)}
+      <div class="p-box stmt-cust"><div class="p-cell"><div style="font-size:13px">ลูกค้า</div><div class="stmt-name">${c ? `(${esc(c.code)}) ${esc(c.name)}` : esc(code)}</div>${c?.phone ? `<div class="stmt-tel">โทร ${esc(c.phone)}</div>` : ''}${c?.zone ? `<div>ที่อยู่ ${esc(c.zone)}</div>` : ''}</div>
+        <div class="p-cell p-side"><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(asOf)}</div><div><b>จำนวนบิล</b> ${rows.length} บิล</div><div><b>ผู้พิมพ์</b> ${esc(user?.name || '-')}</div></div></div>`,
+    thead: '<thead><tr><th class="c" style="width:10mm">ลำดับ</th><th style="width:26mm">วันที่บิล</th><th>เลขที่บิล</th><th class="r" style="width:25mm">ตัดดอกเบี้ย</th><th class="r" style="width:27mm">ตัดเงินต้น</th><th class="r" style="width:37mm;white-space:nowrap">เงินต้นรวมดอกเบี้ย</th></tr></thead>',
+    groups: rows.map((r, i) => `<tr><td class="c">${i + 1}.</td><td>${dd(r.date)}</td><td>${esc(r.no)}</td><td class="r">${money(r.payInterest)}</td><td class="r">${money(r.payPrincipal)}</td><td class="r"><b>${money(round2(r.payInterest + r.payPrincipal))}</b>${r.principalLeft > 0 ? `<div style="font-size:12px">เหลือต้น ${money(r.principalLeft)}</div>` : ''}</td></tr>${itemsTable(r.items)}`),
+    foot: `<tr class="p-foot"><td colspan="3" class="r">รวม ${rows.length} บิล</td><td class="r">${money(totalInt)}</td><td class="r">${money(totalPr)}</td><td class="r">${money(grand)}</td></tr>`,
+    after: `<div class="p-box p-sum">
+      <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(grand)})</div></div>
       <div class="p-cell p-totals" style="width:84mm">
         <div class="p-split"><span>รวมดอกเบี้ย</span><span>${money(totalInt)}</span></div>
         <div class="p-split"><span>รวมเงินต้น</span><span>${money(totalPr)}</span></div>
         <div class="p-split stmt-grand"><span>ยอดชำระทั้งสิ้น</span><span>${money(grand)}</span></div>
-      </div>
-    </div>
-    <div class="p-sign one"><div>ผู้ออกบิล</div></div>
-  </div>`;
-  doPrint(html);
+      </div></div>
+      <div class="p-sign one"><div>ผู้ออกบิล</div></div>`,
+  });
 }
 function printReceipt(r) {
   // Receipts made before the program stored the owed amounts fall back to the paid amounts.
   const rows = r.owed || r.rows;
   const sum = (k) => round2(rows.reduce((s, x) => s + (x[k] || 0), 0));
   const owedTotal = r.owedTotal ?? sum('total');
-  const html = `<div class="paper">
-    ${paperHead('ใบเสร็จรับเงิน', `<div>วันที่ ${r.createdAt ? dt(r.createdAt) : dd(r.date)}</div>`)}
-    ${custBox(r.customerCode, `<div><b>เลขที่</b> ${esc(r.no)}</div><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(r.date)}</div><div><b>รับเงินโดย</b> ${esc(r.by || '-')}</div>`)}
-    <table class="p-table"><thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>บิลอ้างอิง</th><th style="width:28mm">วันที่บิล</th><th class="r" style="width:26mm">เงินต้น</th><th class="r" style="width:24mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>
-    <tbody>${rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>${(() => { const it = x.items || billItems(data.bills.find((b) => b.no === x.no)); return it.length ? `<tr class="p-items"><td></td><td colspan="5"><table class="p-itab">${it.map((l, k) => `<tr><td class="c">${k + 1})</td><td>${esc(l.name)}</td><td class="r">${qtyFmt(l.qty)}</td><td>${esc(l.unit)}</td><td class="r">${money(l.amount)}</td></tr>`).join('')}</table></td></tr>` : ''; })()}`).join('')}
-      <tr class="p-foot"><td colspan="3" class="r">${r.owed ? 'รวมยอดค้าง' : 'รวม'}</td><td class="r">${money(sum('principal'))}</td><td class="r">${money(sum('interest'))}</td><td class="r">${money(owedTotal)}</td></tr></tbody></table>
-    <div class="p-box p-sum">
+  printPaged({
+    head: (sheetNote) => `${paperHead('ใบเสร็จรับเงิน', `<div>วันที่ ${r.createdAt ? dt(r.createdAt) : dd(r.date)}</div>${sheetNote}`)}
+      ${custBox(r.customerCode, `<div><b>เลขที่</b> ${esc(r.no)}</div><div><b>คิดดอกเบี้ยถึงวันที่</b> ${dd(r.date)}</div><div><b>รับเงินโดย</b> ${esc(r.by || '-')}</div>`)}`,
+    thead: '<thead><tr><th class="c" style="width:9mm">ลำดับ</th><th>บิลอ้างอิง</th><th style="width:28mm">วันที่บิล</th><th class="r" style="width:26mm">เงินต้น</th><th class="r" style="width:24mm">ดอกเบี้ย</th><th class="r" style="width:26mm">รวม</th></tr></thead>',
+    groups: rows.map((x, i) => `<tr><td class="c">${i + 1}.</td><td>${esc(x.no)}</td><td>${dd(x.date)}</td><td class="r">${money(x.principal)}</td><td class="r">${money(x.interest)}</td><td class="r"><b>${money(x.total)}</b></td></tr>${itemsTable(x.items || billItems(data.bills.find((b) => b.no === x.no)))}`),
+    foot: `<tr class="p-foot"><td colspan="3" class="r">${r.owed ? 'รวมยอดค้าง' : 'รวม'}</td><td class="r">${money(sum('principal'))}</td><td class="r">${money(sum('interest'))}</td><td class="r">${money(owedTotal)}</td></tr>`,
+    after: `<div class="p-box p-sum">
       <div class="p-notes"><div class="p-remark">หมายเหตุ :</div><div class="p-words">(${bahtText(r.total)})</div></div>
       <div class="p-cell p-totals" style="width:62mm">
         ${r.owed ? `<div class="p-split"><span>ยอดค้างรวม</span><span>${money(owedTotal)}</span></div>` : ''}
         <div class="p-split p-grand"><span>รับชำระครั้งนี้</span><span>${money(r.total)}</span></div>
         ${r.owed ? `<div class="p-split p-rest"><span>ยอดคงค้าง</span><span>${money(r.remaining)}</span></div>` : ''}
-      </div>
-    </div>
-    <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>
-  </div>`;
-  doPrint(html);
+      </div></div>
+      <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>`,
+  });
 }
 
 function openDialog(html, onSubmit) {

@@ -596,3 +596,10 @@ div.field .seg { align-self: flex-start; font-size: 16px; }
 .stmt-grand span:first-child { font-size: 17px; } .stmt-grand span:last-child { font-size: 22px; }
 .alloc-total { font-size: 20px; color: var(--green); }
 .p-sign.one { grid-template-columns: 70mm; justify-content: end; padding-right: 10mm; }
+
+/* several A4 sheets: each sheet is a full page with its own heading */
+#printArea.multi { padding: 0; }
+#printArea.multi .paper { height: 296mm; padding: 8mm 9mm 6mm; box-sizing: border-box; overflow: hidden; break-after: page; page-break-after: always; }
+#printArea.multi .paper:last-child { break-after: auto; page-break-after: auto; }
+.p-sheet { font-weight: 700; margin-top: .5mm; }
+.p-more { text-align: right; font-size: 13px; }
