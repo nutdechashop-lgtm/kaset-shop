@@ -416,7 +416,7 @@ function printPayStatement(code, asOf, { rows, res }) {
         <div class="p-split stmt-grand"><span>ยอดชำระทั้งสิ้น</span><span>${money(grand)}</span></div>
       </div>
     </div>
-    <div class="p-sign two"><div>ผู้จ่ายเงิน</div><div>ผู้รับเงิน</div></div>
+    <div class="p-sign one"><div>ผู้ออกบิล</div></div>
   </div>`;
   doPrint(html);
 }

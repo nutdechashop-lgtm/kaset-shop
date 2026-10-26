@@ -595,3 +595,4 @@ div.field .seg { align-self: flex-start; font-size: 16px; }
 .stmt-grand { border-top: 1.5px solid #000; padding-top: 1.5mm; margin-top: 1mm; align-items: baseline; font-weight: 700; }
 .stmt-grand span:first-child { font-size: 17px; } .stmt-grand span:last-child { font-size: 22px; }
 .alloc-total { font-size: 20px; color: var(--green); }
+.p-sign.one { grid-template-columns: 70mm; justify-content: end; padding-right: 10mm; }
