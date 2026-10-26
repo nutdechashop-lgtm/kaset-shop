@@ -915,6 +915,10 @@ function viewDebtor(code) {
   const asOf = todayIso();
   const c = data.customers.find((x) => x.code === code);
   const d = customerDebts(data, asOf).get(code);
+  // bills waiting for the owner to approve a cancel are not counted in what the customer owes
+  const cancelPending = new Set(pendingRequests().filter((r) => r.kind === 'cancel').map((r) => r.billNo));
+  const live = d ? d.bills.filter((b) => !cancelPending.has(b.no)) : [];
+  const tot = { principal: round2(live.reduce((t, b) => t + b.balance.principal, 0)), interest: round2(live.reduce((t, b) => t + b.balance.interest, 0)), total: round2(live.reduce((t, b) => t + b.balance.total, 0)) };
   let mode = 'amount';
   const selected = new Set();
   view.innerHTML = `
@@ -923,7 +927,7 @@ function viewDebtor(code) {
     <div class="row" style="justify-content:space-between">
       <div style="display:flex;gap:10px;align-items:flex-start"><div><h2>${esc(c?.name || 'รหัส ' + code)}</h2><div class="muted">${esc(c?.zone)} · รหัส ${esc(code)} ${c?.phone ? '· โทร ' + esc(c.phone) : ''}</div></div>
         ${c?.phone ? `<a class="icon-btn call-btn" href="tel:${esc(c.phone.replace(/[^\d+]/g, ''))}" aria-label="โทรหา ${esc(c.name)}">${icon('phone', 22)}</a>` : ''}</div>
-      ${d ? `<div style="text-align:right"><div class="muted" style="font-size:14px">รวมค้างถึงวันนี้</div><div class="mono" style="font-size:26px;font-weight:700">฿${money(d.total)}</div><div class="muted" style="font-size:14px">ต้น ${money(d.principal)} + ดอก ${money(d.interest)}</div></div>` : ''}
+      ${d ? `<div style="text-align:right"><div class="muted" style="font-size:14px">รวมค้างถึงวันนี้</div><div class="mono" style="font-size:26px;font-weight:700">฿${money(tot.total)}</div><div class="muted" style="font-size:14px">ต้น ${money(tot.principal)} + ดอก ${money(tot.interest)}</div>${live.length < d.bills.length ? `<div class="muted" style="font-size:13px">ไม่รวม ${d.bills.length - live.length} บิลที่รออนุมัติยกเลิก</div>` : ''}</div>` : ''}
     </div>
     ${d ? `<div class="scroll"><table id="bt"></table></div>` : '<div class="ok">ไม่มียอดค้าง</div>'}
   </section>
@@ -931,7 +935,7 @@ function viewDebtor(code) {
     <h2>รับชำระ</h2>
     <div class="seg" role="group" aria-label="วิธีชำระ"><button type="button" data-m="amount" aria-pressed="true">ตามจำนวนเงิน</button><button type="button" data-m="bills" aria-pressed="false">ตามบิลที่เลือก</button></div>
     <label class="field" id="amtWrap">จำนวนเงินที่รับ (บาท)<input type="number" id="amt" min="0" step="0.01" inputmode="decimal" placeholder="0.00" class="amt-big"></label>
-    <div class="quick-amt" id="qamt">${[['ทั้งหมด', round2(d.total)], ...[5000, 1000, 500].filter((v) => v < d.total).map((v) => [v.toLocaleString(), v])].map(([t, v]) => `<button type="button" class="btn small" data-amt="${v}">${t}</button>`).join('')}</div>
+    <div class="quick-amt" id="qamt">${[['ทั้งหมด', tot.total], ...[5000, 1000, 500].filter((v) => v < tot.total).map((v) => [v.toLocaleString(), v])].map(([t, v]) => `<button type="button" class="btn small" data-amt="${v}">${t}</button>`).join('')}</div>
     <div class="muted" id="billHint" style="font-size:14px">ตัดดอกเบี้ยก่อน แล้วตัดเงินต้นจากบิลเก่าสุด</div>
     <div class="scroll"><table id="alloc"></table></div>
     <div class="err hidden" id="payErr"></div>
@@ -953,7 +957,6 @@ function viewDebtor(code) {
   }).catch((e) => { if ($('#hist')) $('#hist').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
   if (!d) return;
 
-  const cancelPending = new Set(pendingRequests().filter((r) => r.kind === 'cancel').map((r) => r.billNo));
   $('#bt').innerHTML = `<tr><th></th><th>เลขที่บิล</th><th>วันที่</th><th class="num">ดอก %</th><th class="num">วัน</th><th class="num">เงินต้น</th><th class="num">ดอกเบี้ย</th><th class="num">รวม</th><th></th></tr>`
     + d.bills.map((b) => {
       const cancelling = cancelPending.has(b.no);
