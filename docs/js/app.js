@@ -2272,6 +2272,10 @@ function viewBank() {
 function customerForm(c) {
   const isNew = !c;
   c = c || { code: nextCustomerCode(data.customers), name: '', phone: '', zone: '' };
+  // Change the interest rate of every unpaid credit bill of this customer at once.
+  const openBills = isNew ? [] : data.bills.filter((b) => b.customerCode === c.code && b.type === 'credit' && b.status === 'open');
+  const rates = [...new Set(openBills.map((b) => b.rate))];
+  const mgr = isManager();
   openDialog(`<h2>${isNew ? 'เพิ่มลูกค้า' : 'แก้ไขลูกค้า'}</h2>
     <div class="form-grid">
       <label class="field">รหัส<input type="text" name="code" value="${esc(c.code)}" ${isNew ? '' : 'readonly'} required></label>
@@ -2280,6 +2284,11 @@ function customerForm(c) {
     <label class="field">ชื่อ<input type="text" name="name" value="${esc(c.name)}" required></label>
     <label class="field">ที่อยู่ย่อ / หมู่บ้าน<input type="text" name="zone" value="${esc(c.zone)}" list="zoneList" autocomplete="off"></label>
     <datalist id="zoneList">${zones(data.customers).map((z) => `<option value="${esc(z)}">`).join('')}</datalist>
+    ${openBills.length ? `<div class="rate-all">
+      <label class="field">อัตราดอกเบี้ยของบิลค้างทั้งหมด (${openBills.length} บิล)
+        <select name="rateAll" ${mgr ? '' : 'disabled'}><option value="">ไม่เปลี่ยน · ตอนนี้ ${rates.map((r) => r + '%').join(', ')}</option>${RATES.map((r) => `<option value="${r}">${r}% ต่อ 30 วัน${rates.length === 1 && rates[0] === r ? ' (เท่าเดิม)' : ''}</option>`).join('')}</select></label>
+      <div class="muted" style="font-size:13px">${mgr ? 'เปลี่ยนทุกบิลที่ยังค้างของลูกค้าคนนี้ ยอดดอกคำนวณใหม่ทันที · แต่ละบิลเก็บประวัติการเปลี่ยนอัตราไว้' : 'เฉพาะเจ้าของร้านหรือผู้จัดการ · พนักงานขอเปลี่ยนได้ทีละบิลจากหน้าลูกหนี้'}</div>
+    </div>` : ''}
     <div class="err hidden dlg-err"></div>
     <div class="row"><button class="btn primary" value="save">บันทึก</button><button class="btn" value="cancel" formnovalidate>ยกเลิก</button></div>`, async (f) => {
     const v = Object.fromEntries(new FormData(f));
@@ -2289,7 +2298,16 @@ function customerForm(c) {
     if (isNew && data.customers.some((x) => x.code === rec.code)) throw new Error('รหัสนี้มีแล้ว');
     if (isNew) rec.rate = 0;
     await backend.saveCustomer(shopId, rec);
-    toast('บันทึกลูกค้าแล้ว'); viewCustomers();
+    let changed = 0;
+    if (mgr && v.rateAll !== undefined && v.rateAll !== '') {
+      const rate = Number(v.rateAll);
+      for (const b of openBills.filter((x) => x.rate !== rate)) {
+        await backend.commitBillChange(shopId, b.no, 'rate', { rate }, { by: user.name, reason: `เปลี่ยนทุกบิลของลูกค้าเป็น ${rate}%` });
+        changed++;
+      }
+    }
+    toast(changed ? `บันทึกลูกค้า และเปลี่ยนดอกเป็น ${v.rateAll}% แล้ว ${changed} บิล` : 'บันทึกลูกค้าแล้ว');
+    if (current === 'debt') viewDebtor(rec.code); else viewCustomers();
   });
 }
 function viewCustomers() {
